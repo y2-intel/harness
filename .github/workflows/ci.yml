@@ -227,9 +227,9 @@ jobs:
         env:
           Y2_REQUIRE_TMUX: "1"
 
-      - name: Run Vision route and headless SIGINT regressions
+      - name: Run direct image route and headless SIGINT regressions
         run: |
-          bun test vision-route-fake-gateway.test.ts
+          bun test ./direct-openai-images.test.ts
           bun test ./tui-command-permissions.test.ts --test-name-pattern "y2 ask SIGINT during classifier wait terminates before decision or execution"
         working-directory: tests/e2e
 
