@@ -434,7 +434,7 @@ Do not create version tags manually. Do not change `build.zig.zon` version (it i
 
 ## Repository and License
 
-The canonical repository is `tobalo/y2-intel` on GitHub. All URLs, links, and references to the repo must use `tobalo/y2-intel` (not `retired_credential/y2`, `user/y2`, or any other org/owner). Licensed under Apache-2.0.
+The canonical repository is `y2-intel/harness` on GitHub. All URLs, links, and references to the repo must use `y2-intel/harness` (not `retired_credential/y2`, `user/y2`, or any other org/owner). Licensed under Apache-2.0.
 
 ## What Not To Do
 

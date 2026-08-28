@@ -2033,16 +2033,16 @@ describe("effect-aware command permissions", () => {
       });
       await activeSession.waitForComposer(TIMEOUT);
       await activeSession.sendText("/feedback");
-      await activeSession.waitForText("Opened https://github.com/tobalo/y2-intel/issues/new.", TIMEOUT);
+      await activeSession.waitForText("Opened https://github.com/y2-intel/harness/issues/new.", TIMEOUT);
 
-      expect(readFileSync(openerPath, "utf8")).toBe("https://github.com/tobalo/y2-intel/issues/new");
+      expect(readFileSync(openerPath, "utf8")).toBe("https://github.com/y2-intel/harness/issues/new");
       expect(existsSync(clipboardMarker)).toBe(false);
       expect(
         readdirSync(root.root).filter((entry) => entry.startsWith("y2-trace-")),
       ).toHaveLength(0);
       const escapes = await activeSession.capturePaneEscapes();
       expect(escapes).not.toContain("Feedback:");
-      expect(escapes).toContain("github.com/tobalo/y2-intel/issues/new");
+      expect(escapes).toContain("github.com/y2-intel/harness/issues/new");
       expect(readFileSync(stderrPath, "utf8")).toBe("");
 
       await activeSession.sendText("/quit");

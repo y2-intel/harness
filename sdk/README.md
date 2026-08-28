@@ -367,5 +367,5 @@ These are local development pages and are not publicly hosted links.
 
 Maintainer references:
 
-- [SDK contributor guide](https://github.com/tobalo/y2-intel/blob/main/sdk/AGENTS.md)
-- [Native Node-API design and security model](https://github.com/tobalo/y2-intel/blob/main/sdk/NAPI.md)
+- [SDK contributor guide](https://github.com/y2-intel/harness/blob/main/sdk/AGENTS.md)
+- [Native Node-API design and security model](https://github.com/y2-intel/harness/blob/main/sdk/NAPI.md)

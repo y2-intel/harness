@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub const url = "https://github.com/tobalo/y2-intel/issues/new";
+pub const url = "https://github.com/y2-intel/harness/issues/new";
 
 test "feedback URL stays on the Y2 harness repository" {
-    try std.testing.expectEqualStrings("https://github.com/tobalo/y2-intel/issues/new", url);
+    try std.testing.expectEqualStrings("https://github.com/y2-intel/harness/issues/new", url);
 }

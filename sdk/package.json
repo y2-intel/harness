@@ -5,11 +5,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tobalo/y2-intel.git",
+    "url": "git+https://github.com/y2-intel/harness.git",
     "directory": "sdk"
   },
-  "homepage": "https://github.com/tobalo/y2-intel/tree/main/sdk#readme",
-  "bugs": "https://github.com/tobalo/y2-intel/issues",
+  "homepage": "https://github.com/y2-intel/harness/tree/main/sdk#readme",
+  "bugs": "https://github.com/y2-intel/harness/issues",
   "scripts": {
     "test:node-wasm": "node tests/test-node-wasm.mjs",
     "test:node-napi": "node tests/test-node-napi.mjs",

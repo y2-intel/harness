@@ -2529,13 +2529,13 @@ test "git config parser extracts only sanitized github origin identity" {
         \\    url = https://github.com/other/project.git
         \\[remote "origin"]
         \\    fetch = +refs/heads/*:refs/remotes/origin/*
-        \\    url = https://github.com/tobalo/y2-intel.git
+        \\    url = https://github.com/y2-intel/harness.git
         \\[branch "main"]
         \\    remote = origin
         \\
     )).?;
-    try std.testing.expectEqualStrings("tobalo/y2-intel", identity.repo);
-    try std.testing.expectEqualStrings("y2-intel", identity.repo_name);
+    try std.testing.expectEqualStrings("y2-intel/harness", identity.repo);
+    try std.testing.expectEqualStrings("harness", identity.repo_name);
     try std.testing.expectEqualStrings("github.com", identity.host);
 }
 
@@ -2547,11 +2547,11 @@ test "git config parser accepts ssh github origin remotes" {
 
     const scp = (try parseGitHubRepoIdentityFromConfig(arena,
         \\[ remote "origin" ]
-        \\    url = git@github.com:tobalo/y2-intel.git
+        \\    url = git@github.com:y2-intel/harness.git
         \\
     )).?;
-    try std.testing.expectEqualStrings("tobalo/y2-intel", scp.repo);
-    try std.testing.expectEqualStrings("y2-intel", scp.repo_name);
+    try std.testing.expectEqualStrings("y2-intel/harness", scp.repo);
+    try std.testing.expectEqualStrings("harness", scp.repo_name);
 
     const ssh = (try parseGitHubRepoIdentityFromConfig(arena,
         \\[remote "origin"]
@@ -2651,7 +2651,7 @@ test "turn context emits bounded github repo identity without raw remote url" {
     try writeTestFile(tmp.dir, "workspace/.git/HEAD", "ref: refs/heads/main\n");
     try writeTestFile(tmp.dir, "workspace/.git/config",
         \\[remote "origin"]
-        \\    url = https://github.com/tobalo/y2-intel.git
+        \\    url = https://github.com/y2-intel/harness.git
         \\
     );
 
@@ -2659,8 +2659,8 @@ test "turn context emits bounded github repo identity without raw remote url" {
     defer alloc.free(workspace);
 
     const fragment = try buildTurnContextFragment(arena, workspace);
-    try std.testing.expect(std.mem.find(u8, fragment, "github_repo: tobalo/y2-intel") != null);
-    try std.testing.expect(std.mem.find(u8, fragment, "repo_name: y2-intel") != null);
+    try std.testing.expect(std.mem.find(u8, fragment, "github_repo: y2-intel/harness") != null);
+    try std.testing.expect(std.mem.find(u8, fragment, "repo_name: harness") != null);
     try std.testing.expect(std.mem.find(u8, fragment, "github_host: github.com") != null);
     try std.testing.expect(std.mem.find(u8, fragment, "https://github.com") == null);
 }
@@ -2704,7 +2704,7 @@ test "git info reads worktree branch from gitdir and origin config from commondi
     try writeTestFile(tmp.dir, "repo.git/worktrees/workspace/commondir", "../..\n");
     try writeTestFile(tmp.dir, "repo.git/config",
         \\[remote "origin"]
-        \\    url = git@github.com:tobalo/y2-intel.git
+        \\    url = git@github.com:y2-intel/harness.git
         \\
     );
 
@@ -2714,10 +2714,10 @@ test "git info reads worktree branch from gitdir and origin config from commondi
     const info = try collectGitInfo(arena, workspace);
     try std.testing.expectEqualStrings("worktree-branch", info.branch.?);
     try std.testing.expect(info.remote != null);
-    try std.testing.expectEqualStrings("tobalo/y2-intel", info.remote.?.repo);
+    try std.testing.expectEqualStrings("y2-intel/harness", info.remote.?.repo);
 
     const fragment = try buildTurnContextFragment(arena, workspace);
-    try std.testing.expect(std.mem.find(u8, fragment, "github_repo: tobalo/y2-intel") != null);
+    try std.testing.expect(std.mem.find(u8, fragment, "github_repo: y2-intel/harness") != null);
 }
 
 test "turn context reports unknown git worktree outside git repos" {

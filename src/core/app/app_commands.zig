@@ -537,14 +537,14 @@ pub fn Handlers(comptime App: type) type {
                 try app.writeDomainNotice(.{
                     .topic = "",
                     .tone = .neutral,
-                    .body = "Opened https://github.com/tobalo/y2-intel/issues/new.",
+                    .body = "Opened https://github.com/y2-intel/harness/issues/new.",
                 }, true);
                 return;
             }
             try app.writeDomainNotice(.{
                 .topic = "",
                 .tone = .@"error",
-                .body = "Could not open https://github.com/tobalo/y2-intel/issues/new. Open it manually.",
+                .body = "Could not open https://github.com/y2-intel/harness/issues/new. Open it manually.",
             }, true);
         }
 

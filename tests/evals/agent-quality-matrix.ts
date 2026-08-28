@@ -376,7 +376,7 @@ export const AGENT_QUALITY_BASELINE_MATRIX: readonly AgentQualityMatrixRow[] = [
   {
     id: "github-pr-comments-gh-auth-blocker",
     userPrompt:
-      "Read https://github.com/tobalo/y2-intel/pull/57 comments, and if gh is missing or unauthenticated report the blocker.",
+      "Read https://github.com/vercel-labs/fx/pull/57 comments, and if gh is missing or unauthenticated report the blocker.",
     failureCategory: "GitHub routing",
     expectedFirstTool: {
       category: "GitHub CLI metadata read",
@@ -482,7 +482,7 @@ export const AGENT_QUALITY_BASELINE_MATRIX: readonly AgentQualityMatrixRow[] = [
   },
   {
     id: "github-pr-comments-gh",
-    userPrompt: "Read https://github.com/tobalo/y2-intel/pull/57 comments.",
+    userPrompt: "Read https://github.com/vercel-labs/fx/pull/57 comments.",
     failureCategory: "GitHub routing",
     expectedFirstTool: {
       category: "GitHub CLI metadata read",
@@ -496,7 +496,7 @@ export const AGENT_QUALITY_BASELINE_MATRIX: readonly AgentQualityMatrixRow[] = [
       type: "tool-call recorder test",
       status: "planned",
       notes:
-        "Concrete public PR fixture chosen; a recorded JSON fixture can assert gh routing for tobalo/y2-intel#57.",
+        "Concrete public PR fixture chosen; a recorded JSON fixture can assert gh routing for vercel-labs/fx#57.",
     },
     modelBackedEval: {
       required: true,
@@ -505,7 +505,7 @@ export const AGENT_QUALITY_BASELINE_MATRIX: readonly AgentQualityMatrixRow[] = [
     currentBaselineResult: {
       status: "passing",
       notes:
-        "Live ./zig-out/bin/y2 ask --auto --json --no-save used terminal.exec first with gh pr view 57 --repo tobalo/y2-intel --comments. Forbidden tools: none; behavior summarized PR review comments and bot deploy comments from gh output.",
+        "Live ./zig-out/bin/y2 ask --auto --json --no-save used terminal.exec first with gh pr view 57 --repo vercel-labs/fx --comments. Forbidden tools: none; behavior summarized PR review comments and bot deploy comments from gh output.",
     },
     targetResult: "Routes known GitHub PR comments to gh and reports an actionable blocker if gh cannot run.",
     coveredEntrypoints: [

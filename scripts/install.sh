@@ -2,7 +2,7 @@
 
 set -eu
 
-repository="${Y2_RELEASE_REPOSITORY:-tobalo/y2-intel}"
+repository="${Y2_RELEASE_REPOSITORY:-y2-intel/harness}"
 install_dir="${Y2_INSTALL_DIR:-${HOME}/.y2/bin}"
 requested_version="${1:-latest}"
 

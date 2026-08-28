@@ -37,8 +37,8 @@ The hosted route is not published yet. Until it is live and release artifacts
 are available, build from source:
 
 ```bash
-git clone https://github.com/tobalo/y2-intel.git
-cd y2-intel
+git clone https://github.com/y2-intel/harness.git
+cd harness
 zig build -Doptimize=ReleaseSafe
 ./zig-out/bin/y2
 ```
@@ -166,8 +166,8 @@ and interactive command reference.
 Building y2 requires [Zig 0.16.0+](https://ziglang.org/download/):
 
 ```bash
-git clone https://github.com/tobalo/y2-intel.git
-cd y2-intel
+git clone https://github.com/y2-intel/harness.git
+cd harness
 zig build -Doptimize=ReleaseSafe
 ./zig-out/bin/y2
 ```
