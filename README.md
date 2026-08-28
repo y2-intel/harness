@@ -19,9 +19,9 @@ It's open source (Apache-2.0), model-agnostic, and suitable for both local and c
 
 ## Install
 
-The repository includes the release installer at `scripts/install.sh`. The
-public command will be available after that exact script is served from
-`https://y2.dev/harness/install.sh`:
+The release installer is published at `https://y2.dev/harness/install.sh`.
+After the first `y2-intel/harness` release assets are available, install the
+latest release with:
 
 ```bash
 curl -fsSL https://y2.dev/harness/install.sh | sh
@@ -30,11 +30,10 @@ curl -fsSL https://y2.dev/harness/install.sh | sh
 For a reproducible install, pass an exact release:
 
 ```bash
-curl -fsSL https://y2.dev/harness/install.sh | sh -s -- v0.0.6
+curl -fsSL https://y2.dev/harness/install.sh | sh -s -- vX.Y.Z
 ```
 
-The hosted route is not published yet. Until it is live and release artifacts
-are available, build from source:
+Until those release artifacts are available, build from source:
 
 ```bash
 git clone https://github.com/y2-intel/harness.git
