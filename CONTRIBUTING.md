@@ -335,12 +335,24 @@ Releases are triggered automatically when the version in `src/main.zig` changes 
 2. Merge to `main`
 3. The release workflow checks if `vX.Y.Z` tag exists; if not, it builds four platform binaries, creates the git tag, and publishes a GitHub Release with the binaries attached
 
-The hosted installer and Y2 release origin are not published yet. The future
-installer route is `https://y2.dev/harness/install.sh`, and `y2 upgrade` is
-already isolated from the upstream y2 release origin by targeting
-`https://y2.dev/harness/releases`. Until those routes and signed artifacts are
-live, build this fork from source or download a verified GitHub Actions
-artifact for the exact commit under test.
+The hosted installer is published at `https://y2.dev/harness/install.sh` and
+downloads checksum-verified assets from `y2-intel/harness`. Until a matching
+GitHub Release and its signed artifacts exist, the installer reports that no
+release is available. The `y2 upgrade` command remains dormant until the Y2
+release origin at `https://y2.dev/harness/releases` is published.
+
+Stable macOS artifacts fail closed unless the `y2-intel/harness` repository has
+an `apple-signing` environment with these values:
+
+* Variables: `Y2_SIGNING_IDENTITY`, `Y2_SIGNING_IDENTIFIER`, and
+  `Y2_SIGNING_TEAM_ID`
+* Secrets: `APPLE_DEVELOPER_ID_P12_BASE64`,
+  `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_NOTARY_KEY_P8_BASE64`,
+  `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID`
+
+Configure and verify that environment before merging a version bump. The
+release workflow signs and notarizes both macOS architectures and does not
+publish a partial release when signing credentials are absent or invalid.
 
 After CI passes for a push to `main`, the dev release workflow builds retained
 GitHub Actions artifacts for all four supported platforms and the WebAssembly
