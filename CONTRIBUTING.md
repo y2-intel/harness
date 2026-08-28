@@ -24,7 +24,7 @@ Requirements:
 
 * interactive terminal for manual shell testing
 
-* `Y2_API_KEY` for Agent Y2, or `OPENAI_API_KEY` with `OPENAI_BASE_URL` for a direct OpenAI-compatible endpoint. macOS Keychain API keys configured through `y2 setup` are also supported
+* `Y2_API_KEY` for Agent Y2, or `OPENAI_API_KEY` with `OPENAI_BASE_URL` for a direct OpenAI-compatible endpoint. macOS Keychain API keys configured through `y2 auth` are also supported
 
 Common commands:
 

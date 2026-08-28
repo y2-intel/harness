@@ -175,7 +175,7 @@ pub const stored_key_backend_label = if (builtin.os.tag == .macos) "macOS Keycha
 /// y2 login session is refreshed first.
 pub const LoadMode = enum { stored, refresh_if_needed };
 
-pub const missing_credential_message = "Y2 Information Dominance needs an API key. Run y2 setup or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
+pub const missing_credential_message = "Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
 pub const missing_interactive_credential_message = "Y2 Information Dominance needs an API key. Run /setup or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
 pub const missing_chatgpt_credential_message = "y2 needs a Codex subscription login for this model. Run y2 login codex.";
 pub const missing_chatgpt_interactive_credential_message = "Codex needs a subscription login. Run /login, open Connections, then choose Codex subscription.";
@@ -523,7 +523,7 @@ test "stored key label discloses the backend that answered" {
 }
 
 test "missing credential messages use surface commands in preferred order" {
-    const cli_setup = std.mem.find(u8, missing_credential_message, "y2 setup").?;
+    const cli_setup = std.mem.find(u8, missing_credential_message, "y2 auth").?;
     const cli_env = std.mem.find(u8, missing_credential_message, "Y2_API_KEY").?;
 
     try std.testing.expect(cli_setup < cli_env);

@@ -38,7 +38,13 @@ esac
 if [ "$requested_version" = "latest" ]; then
     release_url="https://github.com/${repository}/releases/latest"
     effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$release_url")"
-    version="${effective_url##*/}"
+    case "$effective_url" in
+        */releases/tag/v*) version="${effective_url##*/}" ;;
+        *)
+            echo "y2 has no published release at ${repository}" >&2
+            exit 1
+            ;;
+    esac
 else
     version="$requested_version"
 fi

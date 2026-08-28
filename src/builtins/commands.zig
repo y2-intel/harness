@@ -100,9 +100,14 @@ pub const top_level_specs = [_]TopLevelSpec{
     },
     .{
         .kind = .setup,
-        .token = "setup",
-        .usage = "setup",
-        .summary = "Configure a Y2 or OpenAI-compatible API key",
+        .token = "auth",
+        .aliases = &.{"setup"},
+        .usage = "auth",
+        .summary = "Get and save a Y2 API key",
+        .details = &.{
+            "Opens the Y2 API Keys page, then securely prompts for the key.",
+            "`y2 setup` remains available as an alias for direct key entry.",
+        },
     },
     .{
         .kind = .status,
@@ -281,7 +286,7 @@ pub const top_level_help_groups = [_]TopLevelHelpGroup{
         .{ .kind = .login, .usage = "login <codex|grok>" },
         .{ .kind = .logout, .usage = "logout <codex|grok>" },
         .{ .kind = .provider, .usage = "provider <y2|codex|grok>" },
-        .{ .kind = .setup, .usage = "setup" },
+        .{ .kind = .setup, .usage = "auth" },
         .{ .kind = .usage, .usage = "usage [--period <24h|7d|30d>]" },
     } },
     .{ .entries = &.{

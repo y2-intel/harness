@@ -62,7 +62,7 @@ pub const Command = union(enum) {
     issue: []const [:0]const u8,
     login: []const [:0]const u8,
     logout: []const [:0]const u8,
-    setup: []const [:0]const u8,
+    setup: SetupInvocation,
     status: []const [:0]const u8,
     permissions: []const [:0]const u8,
     models: []const [:0]const u8,
@@ -77,6 +77,11 @@ pub const Command = union(enum) {
     replay: []const [:0]const u8,
     workspace: []const [:0]const u8,
     unknown: []const u8,
+};
+
+const SetupInvocation = struct {
+    args: []const [:0]const u8,
+    open_key_page: bool = false,
 };
 
 const ResumeInvocation = struct {
@@ -451,6 +456,9 @@ pub fn parse(command_catalog: CommandCatalog, args: []const [:0]const u8) Comman
         'a' => {
             if (command_specs.matchesTopLevel(command_catalog, command, .ask)) return .{ .ask = args[1..] };
             if (command_specs.matchesTopLevel(command_catalog, command, .acp)) return .{ .acp = args[1..] };
+            if (command_specs.matchesTopLevel(command_catalog, command, .setup)) {
+                return .{ .setup = .{ .args = args[1..], .open_key_page = true } };
+            }
         },
         'b' => {
             if (command_specs.matchesTopLevel(command_catalog, command, .background)) return .{ .background = args[1..] };
@@ -478,7 +486,9 @@ pub fn parse(command_catalog: CommandCatalog, args: []const [:0]const u8) Comman
             if (command_specs.matchesTopLevel(command_catalog, command, .replay)) return .{ .replay = args[1..] };
         },
         's' => {
-            if (command_specs.matchesTopLevel(command_catalog, command, .setup)) return .{ .setup = args[1..] };
+            if (command_specs.matchesTopLevel(command_catalog, command, .setup)) {
+                return .{ .setup = .{ .args = args[1..] } };
+            }
             if (command_specs.matchesTopLevel(command_catalog, command, .status)) return .{ .status = args[1..] };
             if (command_specs.matchesTopLevel(command_catalog, command, .sessions)) return .{ .sessions = args[1..] };
             if (command_specs.matchesTopLevel(command_catalog, command, .session)) {
@@ -925,12 +935,12 @@ fn runNonInteractiveWithDeps(
                 return .handled_failure;
             };
             const login_provider = maybe_login_provider orelse {
-                try writeStderr(deps, "y2 login: choose codex or grok; use y2 setup for Y2 or another OpenAI-compatible API key\n");
+                try writeStderr(deps, "y2 login: choose codex or grok; use y2 auth for Y2 or another OpenAI-compatible API key\n");
                 return .handled_failure;
             };
             switch (login_provider) {
                 .gateway => {
-                    try writeStderr(deps, "y2 login: Y2 and OpenAI-compatible endpoints use API keys; run y2 setup\n");
+                    try writeStderr(deps, "y2 login: Y2 and OpenAI-compatible endpoints use API keys; run y2 auth\n");
                     return .handled_failure;
                 },
                 .codex => {
@@ -976,7 +986,7 @@ fn runNonInteractiveWithDeps(
                 return .handled_failure;
             };
             const login_provider = maybe_login_provider orelse {
-                try writeStderr(deps, "y2 logout: choose codex or grok; manage API keys with y2 setup\n");
+                try writeStderr(deps, "y2 logout: choose codex or grok; manage API keys with y2 auth\n");
                 return .handled_failure;
             };
             if (login_provider == .codex) {
@@ -1022,7 +1032,7 @@ fn runNonInteractiveWithDeps(
                     },
                 };
             }
-            try writeStderr(deps, "y2 logout: Y2 and OpenAI-compatible endpoints use API keys; manage them with y2 setup\n");
+            try writeStderr(deps, "y2 logout: Y2 and OpenAI-compatible endpoints use API keys; manage them with y2 auth\n");
             return .handled_failure;
         },
         .provider => |rest| {
@@ -1039,12 +1049,18 @@ fn runNonInteractiveWithDeps(
             else
                 .handled_failure;
         },
-        .setup => |rest| {
-            if (rest.len != 0) {
+        .setup => |invocation| {
+            if (invocation.args.len != 0) {
                 try writeTopLevelUsage(cfg.command_catalog, deps, .setup);
                 return .handled_failure;
             }
-            return if (try runPasteSetup(alloc, cfg.secret_store, deps)) .handled_success else .handled_failure;
+            return if (try runPasteSetup(
+                alloc,
+                cfg.url_opener,
+                cfg.secret_store,
+                deps,
+                invocation.open_key_page,
+            )) .handled_success else .handled_failure;
         },
         .status => |rest| {
             const opts = parseLocalSurfaceArgs(rest) catch |err| {
@@ -1704,21 +1720,34 @@ fn writeStderr(deps: RunDeps, text: []const u8) !void {
 
 fn runPasteSetup(
     alloc: Allocator,
+    opener: host.UrlOpener,
     secret_store: host.SecretStore,
     deps: RunDeps,
+    open_key_page: bool,
 ) !bool {
     if (secret_store.isDisabled()) {
-        try writeStderr(deps, "y2 setup: stored API keys are disabled by Y2_DISABLE_KEYCHAIN\n");
+        try writeStderr(deps, "y2 auth: stored API keys are disabled by Y2_DISABLE_KEYCHAIN\n");
         return false;
     }
+
+    if (open_key_page) {
+        const api_keys_url = "https://y2.dev/app/developers/api-keys";
+        const opened = opener.open(alloc, api_keys_url) catch false;
+        try writeStderr(deps, if (opened)
+            "Opened Y2 API Keys in your browser.\n"
+        else
+            "Open Y2 API Keys in your browser:\n");
+        try writeStderr(deps, api_keys_url ++ "\n\n");
+    }
+
     if (!deps.setup_terminal_available(deps.setup_ctx)) {
-        try writeStderr(deps, "y2 setup: an interactive terminal is required to paste an API key\n");
+        try writeStderr(deps, "y2 auth: an interactive terminal is required to paste an API key\n");
         return false;
     }
 
     try writeStderr(deps, "Paste Y2 or OpenAI-compatible API key (input hidden): ");
     const stored_interactively = secret_store.storeInteractive() catch {
-        try writeStderr(deps, "\nfx setup: API key was not saved\n");
+        try writeStderr(deps, "\ny2 auth: API key was not saved\n");
         return false;
     };
     if (!stored_interactively) {
@@ -1728,13 +1757,13 @@ fn runPasteSetup(
             deps.write_stderr,
             deps.stderr_ctx,
         ) catch {
-            try writeStderr(deps, "\nfx setup: API key was not saved\n");
+            try writeStderr(deps, "\ny2 auth: API key was not saved\n");
             return false;
         };
         defer secret.zeroAndFree(alloc, key);
         try writeStderr(deps, "\n");
         secret_store.store(alloc, key) catch {
-            try writeStderr(deps, "y2 setup: API key was not saved\n");
+            try writeStderr(deps, "y2 auth: API key was not saved\n");
             return false;
         };
     }
@@ -3394,8 +3423,18 @@ test "parse recognizes every top-level command and preserves unknown commands" {
         .issue => |rest| try std.testing.expectEqual(@as(usize, 1), rest.len),
         else => return error.TestExpectedEqual,
     }
+    switch (parse(command_catalog, &.{@constCast("auth")})) {
+        .setup => |invocation| {
+            try std.testing.expectEqual(@as(usize, 0), invocation.args.len);
+            try std.testing.expect(invocation.open_key_page);
+        },
+        else => return error.TestExpectedEqual,
+    }
     switch (parse(command_catalog, &.{@constCast("setup")})) {
-        .setup => |rest| try std.testing.expectEqual(@as(usize, 0), rest.len),
+        .setup => |invocation| {
+            try std.testing.expectEqual(@as(usize, 0), invocation.args.len);
+            try std.testing.expect(!invocation.open_key_page);
+        },
         else => return error.TestExpectedEqual,
     }
     switch (parse(command_catalog, &.{ @constCast("status"), @constCast("--json") })) {
@@ -4164,15 +4203,16 @@ test "runIfRequested version flags reject extra args" {
     }
 }
 
-test "setup is a paste-only stored-key adapter" {
+test "auth opens Y2 API Keys and stores the pasted key" {
     var capture = CaptureOutput.init(std.testing.allocator);
     defer capture.deinit();
     var cfg = testConfig();
+    cfg.url_opener = capture.urlOpener();
     cfg.secret_store = capture.secretStore();
 
     const result = try runIfRequestedWithDeps(
         std.testing.allocator,
-        &.{@constCast("setup")},
+        &.{@constCast("auth")},
         cfg,
         capture.deps(),
     );
@@ -4180,13 +4220,17 @@ test "setup is a paste-only stored-key adapter" {
     try std.testing.expectEqual(RunResult.handled_success, result);
     try std.testing.expectEqual(@as(usize, 1), capture.setup_store_calls);
     try std.testing.expectEqual(@as(usize, 1), capture.setup_read_calls);
+    try std.testing.expectEqual(@as(usize, 1), capture.setup_open_calls);
+    try std.testing.expect(capture.setup_opened_url_matched);
     try std.testing.expect(capture.setup_value_matched);
+    try std.testing.expect(std.mem.find(u8, capture.stderr.written(), "Opened Y2 API Keys in your browser") != null);
+    try std.testing.expect(std.mem.find(u8, capture.stderr.written(), "https://y2.dev/app/developers/api-keys") != null);
     try std.testing.expect(std.mem.find(u8, capture.stderr.written(), "Paste Y2 or OpenAI-compatible API key") != null);
     try std.testing.expect(std.mem.find(u8, capture.stderr.written(), "deprecated provider CLI") == null);
     try std.testing.expect(std.mem.find(u8, capture.stdout.written(), cfg.secret_store.backend_label) != null);
 }
 
-test "setup delegates secure input to an interactive host store" {
+test "setup alias delegates secure input without opening Y2 API Keys" {
     var capture = CaptureOutput.init(std.testing.allocator);
     defer capture.deinit();
     capture.setup_interactive_store = true;
@@ -4203,10 +4247,11 @@ test "setup delegates secure input to an interactive host store" {
     try std.testing.expectEqual(RunResult.handled_success, result);
     try std.testing.expectEqual(@as(usize, 1), capture.setup_store_calls);
     try std.testing.expectEqual(@as(usize, 0), capture.setup_read_calls);
+    try std.testing.expectEqual(@as(usize, 0), capture.setup_open_calls);
     try std.testing.expect(!capture.setup_value_matched);
 }
 
-test "setup preserves the disabled secret-store failure" {
+test "auth preserves the disabled secret-store failure" {
     var capture = CaptureOutput.init(std.testing.allocator);
     defer capture.deinit();
     capture.setup_store_disabled = true;
@@ -4215,7 +4260,7 @@ test "setup preserves the disabled secret-store failure" {
 
     const result = try runIfRequestedWithDeps(
         std.testing.allocator,
-        &.{@constCast("setup")},
+        &.{@constCast("auth")},
         cfg,
         capture.deps(),
     );
@@ -4224,7 +4269,7 @@ test "setup preserves the disabled secret-store failure" {
     try std.testing.expectEqual(@as(usize, 0), capture.setup_store_calls);
     try std.testing.expectEqual(@as(usize, 0), capture.setup_read_calls);
     try std.testing.expectEqualStrings(
-        "y2 setup: stored API keys are disabled by Y2_DISABLE_KEYCHAIN\n",
+        "y2 auth: stored API keys are disabled by Y2_DISABLE_KEYCHAIN\n",
         capture.stderr.written(),
     );
 }
@@ -4795,7 +4840,7 @@ test "runIfRequested local json success appends exactly one newline" {
     const result = try runIfRequestedWithDeps(std.testing.allocator, &.{ @constCast("status"), @constCast("--json") }, testConfig(), deps);
     try std.testing.expectEqual(RunResult.handled_success, result);
     try std.testing.expectEqualStrings(
-        "{\"kind\":\"status\",\"model\":\"test-model\",\"update_channel\":\"stable\",\"build_channel\":\"stable\",\"build_revision\":\"\",\"auth\":\"missing\",\"auth_refreshable\":false,\"auth_help\":\"Y2 Information Dominance needs an API key. Run y2 setup or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.\",\"permission_mode\":\"auto\",\"workspace\":\"/tmp/y2\",\"history_turns\":0,\"session_permission_grants\":0,\"agent_step_limit\":42}\n",
+        "{\"kind\":\"status\",\"model\":\"test-model\",\"update_channel\":\"stable\",\"build_channel\":\"stable\",\"build_revision\":\"\",\"auth\":\"missing\",\"auth_refreshable\":false,\"auth_help\":\"Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.\",\"permission_mode\":\"auto\",\"workspace\":\"/tmp/y2\",\"history_turns\":0,\"session_permission_grants\":0,\"agent_step_limit\":42}\n",
         capture.stdout.written(),
     );
     try std.testing.expect(!std.mem.endsWith(u8, capture.stdout.written(), "\n\n"));
@@ -4888,7 +4933,7 @@ test "writeRenderedJsonLine falls back to heap and appends exactly one newline" 
     );
 
     try std.testing.expectEqualStrings(
-        "{\"kind\":\"status\",\"model\":\"test-model\",\"update_channel\":\"stable\",\"build_channel\":\"stable\",\"build_revision\":\"\",\"auth\":\"missing\",\"auth_refreshable\":false,\"auth_help\":\"Y2 Information Dominance needs an API key. Run y2 setup or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.\",\"permission_mode\":\"ask\",\"workspace\":\"/tmp/y2\",\"history_turns\":0,\"session_permission_grants\":0,\"agent_step_limit\":42}\n",
+        "{\"kind\":\"status\",\"model\":\"test-model\",\"update_channel\":\"stable\",\"build_channel\":\"stable\",\"build_revision\":\"\",\"auth\":\"missing\",\"auth_refreshable\":false,\"auth_help\":\"Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.\",\"permission_mode\":\"ask\",\"workspace\":\"/tmp/y2\",\"history_turns\":0,\"session_permission_grants\":0,\"agent_step_limit\":42}\n",
         capture.stdout.written(),
     );
 }
@@ -4932,6 +4977,8 @@ const CaptureOutput = struct {
     setup_value_matched: bool = false,
     setup_interactive_store: bool = false,
     setup_store_disabled: bool = false,
+    setup_open_calls: usize = 0,
+    setup_opened_url_matched: bool = false,
 
     fn init(alloc: Allocator) CaptureOutput {
         return .{
@@ -4967,7 +5014,21 @@ const CaptureOutput = struct {
             .store_interactive_fn = captureSecretStoreInteractiveWrite,
         };
     }
+
+    fn urlOpener(self: *@This()) host.UrlOpener {
+        return .{
+            .context = self,
+            .open_fn = captureOpenSetupUrl,
+        };
+    }
 };
+
+fn captureOpenSetupUrl(ctx: ?*anyopaque, _: Allocator, url: []const u8) host.UrlOpenError!bool {
+    const capture: *CaptureOutput = @ptrCast(@alignCast(ctx.?));
+    capture.setup_open_calls += 1;
+    capture.setup_opened_url_matched = std.mem.eql(u8, url, "https://y2.dev/app/developers/api-keys");
+    return true;
+}
 
 fn captureStdout(ctx: ?*anyopaque, text: []const u8) !void {
     const capture: *CaptureOutput = @ptrCast(@alignCast(ctx.?));

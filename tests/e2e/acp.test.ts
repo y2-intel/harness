@@ -4903,7 +4903,7 @@ describe("acp: model-independent", () => {
         });
         const resp = await client.request("initialize", { protocolVersion: 1 }, 1) as any;
         expect(resp.error).toBeDefined();
-        expect(resp.error.message).toContain("y2 setup");
+        expect(resp.error.message).toContain("y2 auth");
         expect(resp.error.message).toContain("Y2_API_KEY");
         expect(resp.error.message).toContain("OPENAI_API_KEY");
         expect(client.stderr).toBe("");

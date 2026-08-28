@@ -20,8 +20,7 @@ It's open source (Apache-2.0), model-agnostic, and suitable for both local and c
 ## Install
 
 The release installer is published at `https://y2.dev/harness/install.sh`.
-After the first `y2-intel/harness` release assets are available, install the
-latest release with:
+Install the latest release with:
 
 ```bash
 curl -fsSL https://y2.dev/harness/install.sh | sh
@@ -30,10 +29,10 @@ curl -fsSL https://y2.dev/harness/install.sh | sh
 For a reproducible install, pass an exact release:
 
 ```bash
-curl -fsSL https://y2.dev/harness/install.sh | sh -s -- vX.Y.Z
+curl -fsSL https://y2.dev/harness/install.sh | sh -s -- v0.0.7
 ```
 
-Until those release artifacts are available, build from source:
+Or build from source:
 
 ```bash
 git clone https://github.com/y2-intel/harness.git
@@ -86,11 +85,13 @@ The OpenAI Codex route uses ChatGPT subscription access directly. The session is
 
 The Grok route uses subscription access directly at xAI. Its session is stored privately at `~/.y2/grok-auth.json`, refreshed when needed, and used only with the authenticated xAI catalog and Responses API.
 
-To store the active API key in the supported local credential backend instead of an environment variable:
+To create or manage a Y2 API key and store it in the supported local credential backend:
 
 ```bash
-y2 setup
+y2 auth
 ```
+
+`y2 auth` opens the [Y2 API Keys page](https://y2.dev/app/developers/api-keys), prints the URL as a fallback, and securely prompts for the key. `y2 setup` remains available as a direct key-entry alias.
 
 Run y2 from a project:
 
