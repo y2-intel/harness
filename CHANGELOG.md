@@ -16,7 +16,7 @@
 
 - **Y2 Information Dominance:** Use the Y2 name, terminal identity, configuration, and installation paths throughout the native harness.
 - **Direct provider configuration:** Select Agent Y2 with `Y2_API_KEY`, `Y2_API_CHAT_URL`, and `Y2_MODEL`, or configure another OpenAI-compatible endpoint with `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`.
-- **Native installation:** Install checksum-verified release artifacts from the maintained `y2-intel/harness` repository through `https://y2.dev/harness/install.sh`.
+- **Native installation:** Install checksum-verified release artifacts from the maintained `y2-intel/harness` repository through `https://y2.dev/harness/install.sh`. The initial macOS CLI archives are not Developer ID signed or Apple-notarized.
 
 <!-- release:end -->
 

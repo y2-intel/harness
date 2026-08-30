@@ -26,6 +26,10 @@ Install the latest release with:
 curl -fsSL https://y2.dev/harness/install.sh | sh
 ```
 
+The initial macOS CLI archives are checksum-verified but are not Developer ID
+signed or Apple-notarized. Signing and notarization are planned for a later
+Apple release.
+
 For a reproducible install, pass an exact release:
 
 ```bash

@@ -337,12 +337,17 @@ Releases are triggered automatically when the version in `src/main.zig` changes 
 
 The hosted installer is published at `https://y2.dev/harness/install.sh` and
 downloads checksum-verified assets from `y2-intel/harness`. Until a matching
-GitHub Release and its signed artifacts exist, the installer reports that no
-release is available. The `y2 upgrade` command remains dormant until the Y2
-release origin at `https://y2.dev/harness/releases` is published.
+GitHub Release and its artifacts exist, the installer reports that no release
+is available. The `y2 upgrade` command remains dormant until the Y2 release
+origin at `https://y2.dev/harness/releases` is published.
 
-Stable macOS artifacts fail closed unless the `y2-intel/harness` repository has
-an `apple-signing` environment with these values:
+The initial CLI release publishes checksum-verified macOS archives without
+Developer ID signing or Apple notarization. Do not describe those archives as
+signed or notarized. Apple signing is intentionally deferred while the CLI
+release remains available for supported macOS and Linux architectures.
+
+Before enabling the first signed Apple release, configure the
+`y2-intel/harness` repository's `apple-signing` environment with these values:
 
 * Variables: `Y2_SIGNING_IDENTITY`, `Y2_SIGNING_IDENTIFIER`, and
   `Y2_SIGNING_TEAM_ID`
@@ -350,9 +355,10 @@ an `apple-signing` environment with these values:
   `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_NOTARY_KEY_P8_BASE64`,
   `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID`
 
-Configure and verify that environment before merging a version bump. The
-release workflow signs and notarizes both macOS architectures and does not
-publish a partial release when signing credentials are absent or invalid.
+Configure and verify that environment, then restore the signing helper to both
+macOS release jobs before merging that version bump. The signing helper fails
+closed when credentials are absent or invalid and verifies the Developer ID,
+team, identifier, notarization result, and ticket before packaging.
 
 After CI passes for a push to `main`, the dev release workflow builds retained
 GitHub Actions artifacts for all four supported platforms and the WebAssembly
