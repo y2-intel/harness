@@ -43,7 +43,7 @@ describe("web_fetch permission progress", () => {
       ]);
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("Y2 Information Dominance needs an API key. Run y2 setup or set Y2_API_KEY.");
+      expect(result.stderr).toContain("Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY.");
       expectNoFetchProgress(result.stderr);
     },
     TIMEOUT,

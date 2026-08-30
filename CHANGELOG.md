@@ -1,8 +1,26 @@
 # y2
 
-## 0.0.6
+## 0.0.7
 
 <!-- release:start -->
+
+### Breaking Changes
+
+- **Provider routing:** Connect to Agent Y2 by default or call a configured OpenAI-compatible endpoint directly. Vercel AI Gateway routing is no longer available.
+
+### New Features
+
+- **Guided Y2 authentication:** Run `y2 auth` to open Y2 API Keys and securely save a key. `y2 setup` remains available as a direct-entry alias.
+
+### Improvements
+
+- **Y2 Information Dominance:** Use the Y2 name, terminal identity, configuration, and installation paths throughout the native harness.
+- **Direct provider configuration:** Select Agent Y2 with `Y2_API_KEY`, `Y2_API_CHAT_URL`, and `Y2_MODEL`, or configure another OpenAI-compatible endpoint with `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`.
+- **Native installation:** Install checksum-verified release artifacts from the maintained `y2-intel/harness` repository through `https://y2.dev/harness/install.sh`. The initial macOS CLI archives are not Developer ID signed or Apple-notarized.
+
+<!-- release:end -->
+
+## 0.0.6
 
 **New Gateway sessions use Kimi K3 with Fast mode, foreground commands require timeouts, auto mode reviews exact pending actions, and the macOS arm64 binary is 0.3% smaller (6.12 MiB vs 6.13 MiB).**
 
@@ -55,8 +73,6 @@
 - **Sensitive command output**: Command output flagged as sensitive is not saved with the session, including secrets split across output chunks or oversized lines.
 - **OAuth callback validation**: OAuth authorization denials and successes apply only when the callback state matches the active sign-in attempt, and Grok browser callbacks accept only the expected xAI origin.
 - **MCP issuer validation**: MCP sign-in stops before exchanging a token or saving credentials when the authorization response comes from a different issuer than the server advertised.
-
-<!-- release:end -->
 
 ## 0.0.5
 

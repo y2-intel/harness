@@ -345,56 +345,49 @@ else:
 
 
 class MacosSigningWorkflowTests(unittest.TestCase):
-    def test_stable_release_is_the_only_workflow_with_signing_secrets(self) -> None:
+    def test_cli_release_defers_apple_signing(self) -> None:
         release = RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
         pgso = PGSO_WORKFLOW_PATH.read_text(encoding="utf-8")
         dev_release = DEV_RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn("build-macos-x86_64:", release)
         self.assertIn("runs-on: macos-15-intel", release)
-        self.assertEqual(1, release.count("environment: apple-signing"))
-        self.assertIn("scripts/sign-and-notarize-macos.sh zig-out/bin/y2", release)
-        self.assertIn("sign-stable-release:", pgso)
-        self.assertIn("needs: aggregate", pgso)
-        self.assertEqual(1, pgso.count("environment: apple-signing"))
-        self.assertIn(
-            "scripts/sign-and-notarize-macos.sh "
-            '"$RUNNER_TEMP/y2-pgso-aggregate/candidate/y2"',
-            pgso,
-        )
-        self.assertIn("if: inputs.package_release", pgso)
+        self.assertNotIn("environment: apple-signing", release)
+        self.assertNotIn("scripts/sign-and-notarize-macos.sh", release)
+        self.assertIn("package-stable-release:", pgso)
+        package_release = pgso.split("  package-stable-release:\n", 1)[1]
+        self.assertIn("needs: aggregate", package_release)
+        self.assertIn("if: inputs.package_release", package_release)
+        self.assertNotIn("environment: apple-signing", pgso)
+        self.assertNotIn("scripts/sign-and-notarize-macos.sh", pgso)
         arm64_caller = release.split("  build-macos-arm64:\n", 1)[1].split(
             "\n  release:\n", 1
         )[0]
         self.assertNotIn("secrets:", arm64_caller)
         workflow_call = pgso.split("  workflow_dispatch:\n", 1)[0]
         aggregate = pgso.split("  aggregate:\n", 1)[1].split(
-            "\n  sign-stable-release:\n", 1
+            "\n  package-stable-release:\n", 1
         )[0]
-        sign_release = pgso.split("  sign-stable-release:\n", 1)[1]
         self.assertIn(
             "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-            sign_release,
+            package_release,
         )
         self.assertIn(
             "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
-            sign_release,
+            package_release,
         )
         self.assertIn(
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
-            sign_release,
+            package_release,
         )
-        report_position = sign_release.index("python3 -m scripts.pgso report")
-        signing_position = sign_release.index("scripts/sign-and-notarize-macos.sh")
-        package_position = sign_release.index("tar -czf")
-        self.assertLess(report_position, signing_position)
-        self.assertLess(signing_position, package_position)
+        report_position = package_release.index("python3 -m scripts.pgso report")
+        package_position = package_release.index("tar -czf")
+        self.assertLess(report_position, package_position)
         for secret_name in SECRET_NAMES:
-            secret_reference = f"${{{{ secrets.{secret_name} }}}}"
-            self.assertIn(secret_reference, release)
-            self.assertIn(secret_reference, sign_release)
             self.assertNotIn(secret_name, workflow_call)
             self.assertNotIn(secret_name, aggregate)
+            self.assertNotIn(secret_name, release)
+            self.assertNotIn(secret_name, package_release)
             self.assertNotIn(secret_name, dev_release)
         self.assertNotIn("sign-and-notarize-macos", dev_release)
 

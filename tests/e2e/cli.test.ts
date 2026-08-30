@@ -37,7 +37,7 @@ const NO_API_AUTH = {
   OPENAI_API_KEY: undefined,
 };
 const MISSING_AUTH_MESSAGE =
-  "Y2 Information Dominance needs an API key. Run y2 setup or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
+  "Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
 
 const KEYCHAIN_SERVICE = "Y2_API_KEY";
 
@@ -287,7 +287,7 @@ With --prompt-permissions, JSON and quiet requests may prompt on stderr only whe
         expect(r.stderr).toBe("");
         expect(r.stdout).toContain("Commands:");
         expect(r.stdout).toContain("ask");
-        expect(r.stdout).toContain("setup");
+        expect(r.stdout).toContain("auth");
         expect(r.stdout).toContain("status");
         expect(r.stdout).toContain("doctor");
         expect(maxLineWidth(r.stdout)).toBeLessThanOrEqual(60);
@@ -1258,11 +1258,11 @@ describe("cli: doctor", () => {
 });
 
 
-describe("cli: setup", () => {
+describe("cli: auth", () => {
   test(
-    "y2 setup is a top-level command and fails cleanly when Keychain is disabled",
+    "y2 auth is a top-level command and fails cleanly when Keychain is disabled",
     async () => {
-      const r = await runY2(["setup"], {
+      const r = await runY2(["auth"], {
         env: { ...NO_API_AUTH, Y2_DISABLE_KEYCHAIN: "1" },
       });
       expect(r.code).toBe(1);

@@ -17,6 +17,29 @@ need_command curl
 need_command tar
 need_command uname
 
+is_release_version() {
+    case "$1" in
+        v*) release_numbers="${1#v}" ;;
+        *) return 1 ;;
+    esac
+
+    release_major="${release_numbers%%.*}"
+    release_remainder="${release_numbers#*.}"
+    [ "$release_remainder" != "$release_numbers" ] || return 1
+    release_minor="${release_remainder%%.*}"
+    release_patch="${release_remainder#*.}"
+    [ "$release_patch" != "$release_remainder" ] || return 1
+    case "$release_patch" in *.*) return 1 ;; esac
+
+    for release_component in "$release_major" "$release_minor" "$release_patch"; do
+        case "$release_component" in
+            ""|*[!0-9]*) return 1 ;;
+            0) ;;
+            0*) return 1 ;;
+        esac
+    done
+}
+
 case "$(uname -s)" in
     Darwin) platform="macos" ;;
     Linux) platform="linux" ;;
@@ -38,18 +61,21 @@ esac
 if [ "$requested_version" = "latest" ]; then
     release_url="https://github.com/${repository}/releases/latest"
     effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$release_url")"
-    version="${effective_url##*/}"
+    case "$effective_url" in
+        */releases/tag/v*) version="${effective_url##*/}" ;;
+        *)
+            echo "y2 has no published release at ${repository}" >&2
+            exit 1
+            ;;
+    esac
 else
     version="$requested_version"
 fi
 
-case "$version" in
-    v[0-9]*.[0-9]*.[0-9]*) ;;
-    *)
-        echo "invalid y2 release version: $version" >&2
-        exit 1
-        ;;
-esac
+if ! is_release_version "$version"; then
+    echo "invalid y2 release version: $version" >&2
+    exit 1
+fi
 
 archive="y2-${platform}-${architecture}.tar.gz"
 release_base="${Y2_RELEASE_BASE_URL:-https://github.com/${repository}/releases/download/${version}}"
