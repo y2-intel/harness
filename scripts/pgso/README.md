@@ -58,12 +58,20 @@ GitHub Actions matrices. The remaining distributed subcommands are workflow
 phase interfaces: `train-shard`, `candidate`, `behavior-shard`, `measure`, and
 `aggregate`. They reject a source, corpus, toolchain, bitcode, instrumented
 binary, candidate, assignment, or shard identity mismatch. The aggregate
-command requires all 36 training scenarios, all 53 behavior scenarios, and all
+command requires all 34 training scenarios, all 48 behavior scenarios, and all
 12 performance gates exactly once before it emits `eligible: true`.
+
+The production workflow gives training and behavior shards a
+`--retry-output-dir`. A shard retries exactly once only when its failed corpus
+scenario owns tmux. The first attempt is archived as a separate diagnostic
+artifact, the retry starts with a fresh output directory, and non-tmux failures
+remain immediate failures. Retry artifact names are outside the aggregation
+patterns, so only the final passing attempt can contribute profiles or behavior
+evidence.
 
 ## Corpus
 
-[`corpus.json`](corpus.json) references existing test owners instead of copying their behavior. Training contains six direct CLI commands and thirty deterministic E2E files covering CLI, configuration, tools, Gateway lifecycle, fake web and vision routes, ACP, modern and legacy MCP, sessions, terminal hosting, TUI startup, resizing, rendering, permissions, interruption, subagents, and recovery. A bounded `profile_runs` count can weight a direct training command without duplicating manifest entries or final behavior checks. Seventeen additional deterministic E2E files verify the final candidate without influencing LLVM's hot and cold classification.
+[`corpus.json`](corpus.json) references existing test owners instead of copying their behavior. Training contains six direct CLI commands and twenty-eight deterministic E2E files covering CLI, configuration, tools, Gateway lifecycle, fake web and vision routes, ACP, modern and legacy MCP, sessions, terminal hosting, TUI startup, resizing, rendering, permissions, interruption, subagents, and recovery. A bounded `profile_runs` count can weight a direct training command without duplicating manifest entries or final behavior checks. Fourteen additional deterministic E2E files verify the final candidate without influencing LLVM's hot and cold classification.
 
 Every root `tests/e2e/*.test.ts` file must be classified as training, verification-only, or intentionally excluded. The corpus loader fails on missing, duplicate, stale, or unclassified files, so a new E2E owner cannot silently bypass release qualification. New tests added to an already classified file inherit that file's classification.
 

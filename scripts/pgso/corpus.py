@@ -116,9 +116,15 @@ class CorpusResult:
 
 
 class CorpusRunError(PgsoError):
-    def __init__(self, message: str, result: CorpusResult) -> None:
+    def __init__(
+        self,
+        message: str,
+        result: CorpusResult,
+        scenario: Scenario,
+    ) -> None:
         super().__init__(message)
         self.result = result
+        self.scenario = scenario
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -652,6 +658,7 @@ def _run_scenarios(
                 raise CorpusRunError(
                     f"{failure_label} scenario failed: {scenario.name}: {error}",
                     result,
+                    scenario,
                 ) from error
 
             results.append(

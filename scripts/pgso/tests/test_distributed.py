@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import argparse
 import unittest
 
 import pathlib
 import dataclasses
+import tempfile
 
-from scripts.pgso.corpus import Corpus, Scenario
+from scripts.pgso.corpus import (
+    Corpus,
+    CorpusResult,
+    CorpusRunError,
+    Scenario,
+    ScenarioResult,
+)
 from scripts.pgso.distributed import (
+    _run_with_tmux_retry,
     aggregate_measurement_shards,
     aggregate_scenario_shards,
     matrix_payload,
@@ -34,6 +43,25 @@ def scenario(name: str, timeout_seconds: float) -> Scenario:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_workflow_bounds_training_and_behavior_tmux_retries(self) -> None:
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        workflow = (
+            repo_root / ".github/workflows/pgso-macos-arm64.yml"
+        ).read_text()
+        training_job = workflow.split("\n  train:\n", 1)[1].split(
+            "\n  candidate:\n", 1
+        )[0]
+        behavior_job = workflow.split("\n  behavior:\n", 1)[1].split(
+            "\n  startup:\n", 1
+        )[0]
+
+        self.assertIn("--retry-output-dir", training_job)
+        self.assertIn("Upload training retry diagnostics", training_job)
+        self.assertIn("name: pgso-retry-training-", training_job)
+        self.assertIn("--retry-output-dir", behavior_job)
+        self.assertIn("Upload behavior retry diagnostics", behavior_job)
+        self.assertIn("name: pgso-retry-behavior-", behavior_job)
+
     def test_behavior_workers_install_pinned_zig_without_llvm(self) -> None:
         repo_root = pathlib.Path(__file__).resolve().parents[3]
         action = (repo_root / ".github/actions/setup-pgso/action.yml").read_text()
@@ -180,6 +208,80 @@ class ShardPlanningTests(unittest.TestCase):
             },
             payload,
         )
+
+
+class TmuxRetryTests(unittest.TestCase):
+    def failure(self, *, requires_tmux: bool) -> CorpusRunError:
+        failed_scenario = scenario("tui", 1.0)
+        failed_scenario = dataclasses.replace(
+            failed_scenario,
+            requires_tmux=requires_tmux,
+        )
+        result = CorpusResult(
+            passed=0,
+            skipped=0,
+            failed=1,
+            merged_raw_profiles=0,
+            results=(
+                ScenarioResult(
+                    name=failed_scenario.name,
+                    status="failed",
+                    elapsed_seconds=1.0,
+                    raw_profiles=0,
+                    error="tmux failed",
+                ),
+            ),
+        )
+        return CorpusRunError("scenario failed", result, failed_scenario)
+
+    def test_retries_one_tmux_failure_with_fresh_output(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="y2-pgso-retry-") as temporary:
+            root = pathlib.Path(temporary)
+            arguments = argparse.Namespace(
+                output_dir=root / "current",
+                retry_output_dir=root / "attempt-1",
+            )
+            attempts = 0
+
+            def runner(args: argparse.Namespace) -> pathlib.Path:
+                nonlocal attempts
+                attempts += 1
+                args.output_dir.mkdir()
+                manifest = args.output_dir / "manifest.json"
+                manifest.write_text(f"attempt {attempts}")
+                if attempts == 1:
+                    raise self.failure(requires_tmux=True)
+                return manifest
+
+            manifest = _run_with_tmux_retry(arguments, runner)
+
+            self.assertEqual(2, attempts)
+            self.assertEqual(
+                "attempt 1",
+                (arguments.retry_output_dir / "manifest.json").read_text(),
+            )
+            self.assertEqual("attempt 2", manifest.read_text())
+
+    def test_does_not_retry_a_non_tmux_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="y2-pgso-retry-") as temporary:
+            root = pathlib.Path(temporary)
+            arguments = argparse.Namespace(
+                output_dir=root / "current",
+                retry_output_dir=root / "attempt-1",
+            )
+            attempts = 0
+
+            def runner(args: argparse.Namespace) -> pathlib.Path:
+                nonlocal attempts
+                attempts += 1
+                args.output_dir.mkdir()
+                raise self.failure(requires_tmux=False)
+
+            with self.assertRaises(CorpusRunError):
+                _run_with_tmux_retry(arguments, runner)
+
+            self.assertEqual(1, attempts)
+            self.assertFalse(arguments.retry_output_dir.exists())
 
 
 class CorpusSelectionTests(unittest.TestCase):
