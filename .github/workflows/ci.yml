@@ -322,9 +322,12 @@ jobs:
           scripts=(
             benchmarks/startup.sh
             scripts/check-public-surface.sh
+            scripts/install.sh
+            scripts/test-install.sh
           )
           bash -n "${scripts[@]}"
           shellcheck "${scripts[@]}"
+          ./scripts/test-install.sh
 
   e2e_acp_full_mode:
     name: E2E ACP (full, ${{ matrix.optimize }})

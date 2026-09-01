@@ -23,8 +23,12 @@ The release installer is published at `https://y2.dev/harness/install.sh`.
 Install the latest release with:
 
 ```bash
-curl -fsSL https://y2.dev/harness/install.sh | sh
+export PATH="$HOME/.y2/bin:$PATH" && curl -fsSL https://y2.dev/harness/install.sh | sh
 ```
+
+The command makes `y2` available in the current terminal. The installer also adds the same PATH
+entry to your detected shell profile for future terminals. Pass `--no-modify-path` to leave shell
+profiles unchanged.
 
 The initial macOS CLI archives are checksum-verified but are not Developer ID
 signed or Apple-notarized. Signing and notarization are planned for a later
@@ -33,7 +37,7 @@ Apple release.
 For a reproducible install, pass an exact release:
 
 ```bash
-curl -fsSL https://y2.dev/harness/install.sh | sh -s -- v0.0.7
+export PATH="$HOME/.y2/bin:$PATH" && curl -fsSL https://y2.dev/harness/install.sh | sh -s -- v0.0.7
 ```
 
 Or build from source:
