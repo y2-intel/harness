@@ -2,7 +2,11 @@
 
 set -eu
 
-repo_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+repo_root="$(
+    unset CDPATH
+    cd -- "$(dirname "$0")/.."
+    pwd
+)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/y2-installer-test.XXXXXX")"
 
 cleanup() {
@@ -45,7 +49,7 @@ SHELL="/bin/zsh" \
 Y2_RELEASE_BASE_URL="file://${release_dir}" \
 sh "${repo_root}/scripts/install.sh" v0.0.7 > "${test_root}/first.out"
 
-profile_line='export PATH="$HOME/.y2/bin:$PATH"'
+profile_line="export PATH=\"\$HOME/.y2/bin:\$PATH\""
 grep -Fx "$profile_line" "${profile_home}/.zshrc" >/dev/null
 grep -F "Added y2 to PATH in ${profile_home}/.zshrc" "${test_root}/first.out" >/dev/null
 grep -F "Open a new terminal to run y2." "${test_root}/first.out" >/dev/null

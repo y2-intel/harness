@@ -77,8 +77,8 @@ persist_default_path() {
     profile="$(shell_profile)"
     shell_path="${SHELL:-}"
     case "${shell_path##*/}" in
-        fish) profile_line='fish_add_path "$HOME/.y2/bin"' ;;
-        *) profile_line='export PATH="$HOME/.y2/bin:$PATH"' ;;
+        fish) profile_line="fish_add_path \"\$HOME/.y2/bin\"" ;;
+        *) profile_line="export PATH=\"\$HOME/.y2/bin:\$PATH\"" ;;
     esac
 
     if [ -f "$profile" ] && grep -F "$profile_line" "$profile" >/dev/null 2>&1; then
