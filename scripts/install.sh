@@ -3,8 +3,41 @@
 set -eu
 
 repository="${Y2_RELEASE_REPOSITORY:-y2-intel/harness}"
-install_dir="${Y2_INSTALL_DIR:-${HOME}/.y2/bin}"
-requested_version="${1:-latest}"
+default_install_dir="${HOME}/.y2/bin"
+install_dir="${Y2_INSTALL_DIR:-${default_install_dir}}"
+requested_version="latest"
+modify_path="true"
+version_seen="false"
+
+usage() {
+    echo "Usage: install.sh [vX.Y.Z] [--no-modify-path]"
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --no-modify-path)
+            modify_path="false"
+            ;;
+        --*)
+            echo "unknown y2 installer option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            if [ "$version_seen" = "true" ]; then
+                echo "y2 installer accepts only one release version" >&2
+                exit 1
+            fi
+            requested_version="$1"
+            version_seen="true"
+            ;;
+    esac
+    shift
+done
 
 need_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -14,8 +47,54 @@ need_command() {
 }
 
 need_command curl
+need_command grep
+need_command install
+need_command mktemp
 need_command tar
 need_command uname
+
+shell_profile() {
+    shell_path="${SHELL:-}"
+    shell_name="${shell_path##*/}"
+    case "$shell_name" in
+        zsh) echo "${HOME}/.zshrc" ;;
+        bash)
+            if [ -f "${HOME}/.bash_profile" ] && [ ! -f "${HOME}/.bashrc" ]; then
+                echo "${HOME}/.bash_profile"
+            else
+                echo "${HOME}/.bashrc"
+            fi
+            ;;
+        fish) echo "${HOME}/.config/fish/config.fish" ;;
+        *) echo "${HOME}/.profile" ;;
+    esac
+}
+
+persist_default_path() {
+    [ "$modify_path" = "true" ] || return 0
+    [ "$install_dir" = "$default_install_dir" ] || return 0
+
+    profile="$(shell_profile)"
+    shell_path="${SHELL:-}"
+    case "${shell_path##*/}" in
+        fish) profile_line='fish_add_path "$HOME/.y2/bin"' ;;
+        *) profile_line='export PATH="$HOME/.y2/bin:$PATH"' ;;
+    esac
+
+    if [ -f "$profile" ] && grep -F "$profile_line" "$profile" >/dev/null 2>&1; then
+        echo "y2 PATH is already configured in ${profile}"
+        return 0
+    fi
+
+    profile_dir="${profile%/*}"
+    mkdir -p "$profile_dir"
+    {
+        echo ""
+        echo "# Added by the y2 installer"
+        echo "$profile_line"
+    } >> "$profile"
+    echo "Added y2 to PATH in ${profile}"
+}
 
 is_release_version() {
     case "$1" in
@@ -113,7 +192,14 @@ mkdir -p "$install_dir"
 install "${temporary_dir}/y2" "${install_dir}/y2"
 
 echo "Installed y2 ${version} to ${install_dir}/y2"
+persist_default_path
 case ":${PATH}:" in
-    *":${install_dir}:"*) ;;
-    *) echo "Add ${install_dir} to PATH to run y2 from any directory." ;;
+    *":${install_dir}:"*) echo "y2 is ready. Run: y2" ;;
+    *)
+        if [ "$modify_path" = "true" ] && [ "$install_dir" = "$default_install_dir" ]; then
+            echo "Open a new terminal to run y2."
+        else
+            echo "Run y2 now with: ${install_dir}/y2"
+        fi
+        ;;
 esac
