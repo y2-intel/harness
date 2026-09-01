@@ -146,6 +146,7 @@ jobs:
           python3 -m scripts.pgso.distributed train-shard \
             --seed-dir "$RUNNER_TEMP/y2-pgso-seed" \
             --output-dir "$RUNNER_TEMP/y2-pgso-training-${{ matrix.id }}" \
+            --retry-output-dir "$RUNNER_TEMP/y2-pgso-training-retry-${{ matrix.id }}" \
             --shard-id "${{ matrix.id }}" \
             --scenarios "${{ matrix.scenarios }}" \
             --llvm-bin "${{ steps.setup.outputs.llvm-bin }}" \
@@ -162,6 +163,15 @@ jobs:
             ${{ runner.temp }}/y2-pgso-training-${{ matrix.id }}/profile.profdata
             ${{ runner.temp }}/y2-pgso-training-${{ matrix.id }}/logs
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload training retry diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgso-retry-training-${{ github.sha }}-${{ matrix.id }}
+          path: ${{ runner.temp }}/y2-pgso-training-retry-${{ matrix.id }}
+          if-no-files-found: ignore
           retention-days: 14
 
   candidate:
@@ -279,6 +289,7 @@ jobs:
           python3 -m scripts.pgso.distributed behavior-shard \
             --candidate-dir "$RUNNER_TEMP/y2-pgso-candidate" \
             --output-dir "$RUNNER_TEMP/y2-pgso-behavior-${{ matrix.id }}" \
+            --retry-output-dir "$RUNNER_TEMP/y2-pgso-behavior-retry-${{ matrix.id }}" \
             --shard-id "${{ matrix.id }}" \
             --scenarios "${{ matrix.scenarios }}" \
             --bun "${{ steps.setup.outputs.bun-bin }}"
@@ -295,6 +306,15 @@ jobs:
             ${{ runner.temp }}/y2-pgso-behavior-${{ matrix.id }}/behavior/traces
             ${{ runner.temp }}/y2-pgso-behavior-${{ matrix.id }}/driver-logs
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload behavior retry diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgso-retry-behavior-${{ github.sha }}-${{ matrix.id }}
+          path: ${{ runner.temp }}/y2-pgso-behavior-retry-${{ matrix.id }}
+          if-no-files-found: ignore
           retention-days: 14
 
   startup:

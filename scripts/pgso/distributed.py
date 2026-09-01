@@ -11,7 +11,7 @@ import re
 import shutil
 import sys
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from scripts.pgso.corpus import (
     Corpus,
@@ -412,6 +412,35 @@ def _fresh_directory(path: pathlib.Path) -> pathlib.Path:
             raise PgsoError(f"output directory is not empty: {path}")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _run_with_tmux_retry(
+    arguments: argparse.Namespace,
+    runner: Callable[[argparse.Namespace], pathlib.Path],
+) -> pathlib.Path:
+    try:
+        return runner(arguments)
+    except CorpusRunError as error:
+        retry_output = arguments.retry_output_dir
+        if retry_output is None or not error.scenario.requires_tmux:
+            raise
+
+        output = arguments.output_dir.resolve()
+        archived = retry_output.resolve()
+        if output == archived or output in archived.parents or archived in output.parents:
+            raise PgsoError("retry output must be separate from the shard output")
+        if not output.is_dir():
+            raise PgsoError(f"failed shard output is missing: {output}")
+        if archived.exists():
+            raise PgsoError(f"retry output already exists: {archived}")
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(output), str(archived))
+        print(
+            "Retrying failed tmux corpus scenario after isolated cleanup: "
+            f"{error.scenario.name}",
+            file=sys.stderr,
+        )
+        return runner(arguments)
 
 
 def _parse_names(value: str) -> tuple[str, ...]:
@@ -1197,6 +1226,7 @@ def _parser() -> argparse.ArgumentParser:
     training.add_argument("--llvm-bin", required=True)
     training.add_argument("--zig", default="zig")
     training.add_argument("--bun", default="bun")
+    training.add_argument("--retry-output-dir", type=pathlib.Path)
 
     candidate = subparsers.add_parser("candidate")
     _add_common(candidate)
@@ -1213,6 +1243,7 @@ def _parser() -> argparse.ArgumentParser:
     behavior.add_argument("--shard-id", required=True)
     behavior.add_argument("--scenarios", required=True)
     behavior.add_argument("--bun", default="bun")
+    behavior.add_argument("--retry-output-dir", type=pathlib.Path)
 
     measurement = subparsers.add_parser("measure")
     _add_common(measurement)
@@ -1247,11 +1278,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
                 return 0
             if arguments.command == "train-shard":
-                manifest = run_training_shard(arguments)
+                manifest = _run_with_tmux_retry(arguments, run_training_shard)
             elif arguments.command == "candidate":
                 manifest = run_candidate(arguments)
             elif arguments.command == "behavior-shard":
-                manifest = run_behavior_shard(arguments)
+                manifest = _run_with_tmux_retry(arguments, run_behavior_shard)
             elif arguments.command == "measure":
                 if arguments.samples < 50:
                     raise PgsoError("measurement requires at least 50 samples")
