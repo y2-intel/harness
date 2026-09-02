@@ -126,16 +126,17 @@ pub fn buildRequest(
     );
     try writer.writeByte(']');
 
+    const tool_count = try writeTools(writer, alloc, request);
+    if (tool_count > 0) {
+        try writer.writeAll(",\"tool_choice\":");
+        const tool_choice: types.ToolChoice = if (request.vision_mode == .required) .required else request.tool_choice;
+        try std.json.Stringify.value(tool_choice.label(), .{}, writer);
+        try writer.writeAll(",\"parallel_tool_calls\":true");
+    } else if (request.tool_choice == .none) {
+        try writer.writeAll(",\"tool_choice\":\"none\"");
+    }
+
     if (mode == .openai_compatible) {
-        const tool_count = try writeTools(writer, alloc, request);
-        if (tool_count > 0) {
-            try writer.writeAll(",\"tool_choice\":");
-            const tool_choice: types.ToolChoice = if (request.vision_mode == .required) .required else request.tool_choice;
-            try std.json.Stringify.value(tool_choice.label(), .{}, writer);
-            try writer.writeAll(",\"parallel_tool_calls\":true");
-        } else if (request.tool_choice == .none) {
-            try writer.writeAll(",\"tool_choice\":\"none\"");
-        }
         if (request.max_output_tokens) |limit| {
             try writer.print(",\"max_tokens\":{d}", .{limit});
         }
@@ -180,8 +181,6 @@ fn writeMessages(
 ) !void {
     var first = true;
     for (messages, 0..) |message, index| {
-        if (mode == .y2_agent and message.role != .user and message.role != .assistant) continue;
-        if (mode == .y2_agent and (message.content == null or message.content.?.len == 0)) continue;
         if (!first) try writer.writeByte(',');
         first = false;
 
@@ -231,7 +230,7 @@ fn writeMessages(
             try std.json.Stringify.value(message.content orelse "", .{}, writer);
         }
 
-        if (mode == .openai_compatible) switch (message.role) {
+        switch (message.role) {
             .assistant => if (message.tool_calls.len > 0) try writeAssistantToolCalls(writer, message.tool_calls),
             .tool => {
                 try writer.writeAll(",\"tool_call_id\":");
@@ -242,7 +241,7 @@ fn writeMessages(
                 }
             },
             else => {},
-        };
+        }
         try writer.writeByte('}');
     }
 }
@@ -877,16 +876,22 @@ test "OpenAI-compatible failures preserve numeric Retry-After pacing" {
     try std.testing.expectEqual(@as(?u64, 7), retryAfterSeconds(head));
 }
 
-test "Y2 request contains only the documented Agent Y2 compatibility fields" {
+test "Y2 request preserves the local coding-agent tool protocol" {
+    const tool = model_tool_schema.FunctionSchema{
+        .name = "read_file",
+        .description = "Read a file",
+        .input_schema = .{},
+    };
     const messages = [_]types.ChatMessage{
         .{ .role = .system, .content = "Local system prompt" },
         .{ .role = .user, .content = "What changed?" },
-        .{ .role = .assistant, .content = "Earlier answer" },
-        .{ .role = .tool, .tool_call_id = "call_1", .content = "tool output" },
+        .{ .role = .assistant, .tool_calls = &.{.{ .id = "call_1", .name = "read_file", .arguments_json = "{\"path\":\"README.md\"}" }} },
+        .{ .role = .tool, .tool_call_id = "call_1", .tool_name = "read_file", .content = "tool output" },
     };
     const body = try buildRequest(std.testing.allocator, .{
         .model = "y2-agent",
         .messages = &messages,
+        .tools = .{ .additional_functions = &.{tool} },
         .tool_choice = .auto,
         .provider_options = .{ .reasoning = types.ReasoningEffort.literal("high") },
         .max_output_tokens = 42,
@@ -898,11 +903,11 @@ test "Y2 request contains only the documented Agent Y2 compatibility fields" {
     try std.testing.expect(std.mem.find(u8, body, "\"model\":\"y2-agent\"") != null);
     try std.testing.expect(std.mem.find(u8, body, "\"stream\":true") != null);
     try std.testing.expect(std.mem.find(u8, body, "What changed?") != null);
-    try std.testing.expect(std.mem.find(u8, body, "Earlier answer") != null);
-    try std.testing.expect(std.mem.find(u8, body, "Local system prompt") == null);
-    try std.testing.expect(std.mem.find(u8, body, "tool output") == null);
+    try std.testing.expect(std.mem.find(u8, body, "Local system prompt") != null);
+    try std.testing.expect(std.mem.find(u8, body, "tool output") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"tool_call_id\":\"call_1\"") != null);
     try std.testing.expect(std.mem.find(u8, body, "max_tokens") == null);
-    try std.testing.expect(std.mem.find(u8, body, "tools") == null);
+    try std.testing.expect(std.mem.find(u8, body, "\"tools\":[{\"type\":\"function\"") != null);
 }
 
 test "OpenAI-compatible request preserves local function tool history" {

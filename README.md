@@ -58,7 +58,7 @@ export Y2_API_KEY="your-y2-api-key"
 y2
 ```
 
-The default request target is `https://api.y2.dev/api/v1/chat/completions` with model `y2-agent`. This route sends the OpenAI-compatible streaming fields supported by [Agent Y2](https://y2.dev/docs/api/agent-y2/). Agent Y2 owns its internal agent behavior, so local system messages and local function tools are not sent on this route.
+The default request target is `https://api.y2.dev/api/v1/chat/completions` with model `y2-agent`. The harness sends its repository instructions, transcript, and local function schemas through [Agent Y2 client-harness mode](https://y2.dev/docs/api/agent-y2/). Y2 returns tool calls, while this binary keeps permission checks and tool execution on your machine. Requests without client tools retain Agent Y2's fixed Copilot behavior and server-side intelligence tools.
 
 To call another OpenAI-compatible endpoint directly, configure its base URL, key, and model:
 
@@ -138,6 +138,10 @@ Use `y2 ask` for a single request:
 ```bash
 y2 ask "explain the changes in this repository"
 ```
+
+Repository instructions are discovered from applicable `AGENTS.md` files, with deeper files
+scoping the directories beneath them. The same local agent loop supports skills, subagents, file
+creation and editing, and command execution under the active permission policy.
 
 Foreground terminal commands run with an explicit finite deadline. y2 uses durable terminal sessions for services, watchers, GUI applications, and other long-lived work, and keeps captured foreground output available through an opaque bounded-read handle for the active session or `--no-save` process.
 
