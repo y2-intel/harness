@@ -457,6 +457,54 @@ describe("cli: status", () => {
     TIMEOUT,
   );
 
+  for (const [source, help] of [
+    [
+      "api_key",
+      "An environment API key is selected but unavailable. Set Y2_API_KEY, or set OPENAI_API_KEY with OPENAI_BASE_URL before starting y2; no other credential was selected.",
+    ],
+    [
+      "stored_key",
+      "A stored Y2 API key is selected but unavailable. Run y2 auth to save one or choose another credential; no other credential was selected.",
+    ],
+  ] as const) {
+    test(
+      `status and doctor preserve unavailable explicit ${source} recovery`,
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), "y2-e2e-status-explicit-source-"));
+        try {
+          const y2Dir = join(root, ".y2");
+          mkdirSync(y2Dir, { recursive: true });
+          writeFileSync(
+            join(y2Dir, "settings.json"),
+            `${JSON.stringify({ provider: "gateway", credential_source: source })}\n`,
+          );
+          const env = {
+            ...NO_API_AUTH,
+            HOME: realpathSync(root),
+            Y2_DISABLE_KEYCHAIN: "1",
+          };
+
+          const status = await runY2(["status", "--json"], { env });
+          const doctor = await runY2(["doctor", "--json"], { env });
+
+          expect(status.code).toBe(0);
+          expect(doctor.code).toBe(0);
+          expect(JSON.parse(status.stdout.trim())).toMatchObject({
+            auth: "missing",
+            auth_help: help,
+          });
+          expect(JSON.parse(doctor.stdout.trim()).checks).toContainEqual({
+            name: "auth",
+            status: "fail",
+            detail: help,
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+      TIMEOUT,
+    );
+  }
 
   test(
     "status reports an active Y2 API key without exposing it",

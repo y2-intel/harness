@@ -543,19 +543,25 @@ pub const StatusSnapshot = struct {
 
     pub fn missingHelp(self: StatusSnapshot, surface: MissingHelpSurface) ?[]const u8 {
         if (self.active_source != null) return null;
-        if (self.stored_key_status == .unavailable) return credentials.unreadable_store_message;
-        if (self.required_source == .chatgpt_subscription) {
-            return switch (surface) {
+        if (self.required_source) |required_source| return switch (required_source) {
+            .api_key => "An environment API key is selected but unavailable. Set Y2_API_KEY, or set OPENAI_API_KEY with OPENAI_BASE_URL before starting y2; no other credential was selected.",
+            .stored_key => if (self.stored_key_status == .unavailable) switch (surface) {
+                .cli => "The selected stored Y2 API key could not be read from " ++ credentials.stored_key_backend_label ++ ". Run y2 auth to replace it or choose another credential; no other credential was selected.",
+                .interactive => "The selected stored Y2 API key could not be read from " ++ credentials.stored_key_backend_label ++ ". Run /setup to choose an available credential; no other credential was selected.",
+            } else switch (surface) {
+                .cli => "A stored Y2 API key is selected but unavailable. Run y2 auth to save one or choose another credential; no other credential was selected.",
+                .interactive => "A stored Y2 API key is selected but unavailable. Run /setup to choose an available credential; no other credential was selected.",
+            },
+            .chatgpt_subscription => switch (surface) {
                 .cli => credentials.missing_chatgpt_credential_message,
                 .interactive => credentials.missing_chatgpt_interactive_credential_message,
-            };
-        }
-        if (self.required_source == .grok_subscription) {
-            return switch (surface) {
+            },
+            .grok_subscription => switch (surface) {
                 .cli => credentials.missing_grok_credential_message,
                 .interactive => credentials.missing_grok_interactive_credential_message,
-            };
-        }
+            },
+        };
+        if (self.stored_key_status == .unavailable) return credentials.unreadable_store_message;
         return switch (surface) {
             .cli => credentials.missing_credential_message,
             .interactive => credentials.missing_interactive_credential_message,
@@ -666,16 +672,23 @@ pub fn loadStatusSnapshotForProvider(
         };
     }
     return .{
-        .required_source = if (provider == .codex)
-            .chatgpt_subscription
-        else if (provider == .grok)
-            .grok_subscription
-        else
-            null,
+        .required_source = requiredSourceForStatus(provider, preferred),
         .stored_key_status = resolution.stored_key_status,
         .gateway_connected = gateway_connected,
         .chatgpt_connected = chatgpt_connected,
         .grok_connected = grok_connected,
+    };
+}
+
+fn requiredSourceForStatus(
+    provider: ?model_provider.ProviderId,
+    preferred: ?credentials.Source,
+) ?credentials.Source {
+    const selected_provider = provider orelse return preferred;
+    return switch (selected_provider) {
+        .codex => .chatgpt_subscription,
+        .grok => .grok_subscription,
+        .gateway => if (preferred == .api_key or preferred == .stored_key) preferred else null,
     };
 }
 
@@ -1961,6 +1974,40 @@ test "auth status snapshot distinguishes an absent store from an unreadable one"
 
     const resolved = StatusSnapshot{ .active_source = .api_key, .stored_key_status = .unavailable };
     try std.testing.expect(resolved.missingHelp(.cli) == null);
+}
+
+test "auth status preserves explicit key-source recovery guidance" {
+    const explicit_api_key = StatusSnapshot{
+        .required_source = .api_key,
+        .stored_key_status = .unavailable,
+    };
+    const api_key_help = explicit_api_key.missingHelp(.cli).?;
+    try std.testing.expect(std.mem.find(u8, api_key_help, "Y2_API_KEY") != null);
+    try std.testing.expect(std.mem.find(u8, api_key_help, "OPENAI_API_KEY") != null);
+    try std.testing.expect(std.mem.find(u8, api_key_help, credentials.stored_key_backend_label) == null);
+    try std.testing.expect(std.mem.find(u8, api_key_help, "no other credential was selected") != null);
+
+    const missing_stored_key = StatusSnapshot{ .required_source = .stored_key };
+    try std.testing.expect(std.mem.find(u8, missing_stored_key.missingHelp(.cli).?, "Run y2 auth") != null);
+    try std.testing.expect(std.mem.find(u8, missing_stored_key.missingHelp(.interactive).?, "Run /setup") != null);
+
+    const unreadable_stored_key = StatusSnapshot{
+        .required_source = .stored_key,
+        .stored_key_status = .unavailable,
+    };
+    const unreadable_help = unreadable_stored_key.missingHelp(.cli).?;
+    try std.testing.expect(std.mem.find(u8, unreadable_help, "could not be read") != null);
+    try std.testing.expect(std.mem.find(u8, unreadable_help, credentials.stored_key_backend_label) != null);
+    try std.testing.expect(!std.mem.eql(u8, unreadable_help, credentials.unreadable_store_message));
+}
+
+test "auth status keeps provider and explicit source requirements compatible" {
+    try std.testing.expectEqual(credentials.Source.chatgpt_subscription, requiredSourceForStatus(.codex, .api_key).?);
+    try std.testing.expectEqual(credentials.Source.grok_subscription, requiredSourceForStatus(.grok, .stored_key).?);
+    try std.testing.expectEqual(credentials.Source.api_key, requiredSourceForStatus(.gateway, .api_key).?);
+    try std.testing.expectEqual(credentials.Source.stored_key, requiredSourceForStatus(.gateway, .stored_key).?);
+    try std.testing.expect(requiredSourceForStatus(.gateway, .chatgpt_subscription) == null);
+    try std.testing.expectEqual(credentials.Source.grok_subscription, requiredSourceForStatus(null, .grok_subscription).?);
 }
 
 test "auth status snapshot reports an expired subscription without claiming it is unrefreshable" {

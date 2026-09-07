@@ -101,6 +101,8 @@ y2 auth
 
 `y2 auth` opens the [Y2 API Keys page](https://y2.dev/app/developers/api-keys), prints the URL as a fallback, and securely prompts for the key. `y2 setup` remains available as a direct key-entry alias.
 
+When an explicitly selected credential is unavailable, `y2 status` and `y2 doctor` identify that source and give source-specific recovery guidance without suggesting an unselected fallback.
+
 Run y2 from a project:
 
 ```bash
