@@ -19,7 +19,7 @@ Later commits were reviewed individually for compatibility. The reviewed tip con
 
 | Source | Adaptation |
 | --- | --- |
-| `deef88876cf8658f0b59fb9d1a16e43cce41f7cf` from Y2 PR 6 | Preserve recovery guidance for an explicitly selected credential without suggesting an unselected fallback. |
+| `deef88876cf8658f0b59fb9d1a16e43cce41f7cf` from Y2 PR 6, clarified by `cb8b171511c9e020f26f87e775b4fc5f1daca7ec` | When no credential resolves, preserve a compatible explicitly selected source in recovery guidance. Existing credential selection and fallback remain unchanged; text and JSON diagnostics are verified. |
 | `09ff1684ffa7bc3c18bbf3bde3655eb0cffc5e7a` | Permit secretless PKCE OAuth when server metadata omits the `none` authentication method. |
 | `3fbb457073e9a5dc3c81fbcce0dfb308dd00510c` | Indent wrapped lines of literal bullet lists. |
 | `80afb1790a55ec8006b6a5efe1756d21636a9bc2` | Match GFM block syntax for fences, lists, headings, and quotes. |
