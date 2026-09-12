@@ -387,6 +387,13 @@ immutable tag, verifies every archive and checksum in a draft release, then
 publishes it. Retries reuse the same source/tag and never replace a tag or
 conflicting uploaded bytes. Never create tags manually.
 
+When publisher repairs require a newer main commit, dispatch **Recover Release**
+with the original fully qualified Release run ID. Recovery validates the original
+Full CI and PGSO jobs, downloads and verifies the retained artifact digests, and
+finishes the existing draft at its immutable tag. It never rebuilds artifacts or
+creates a replacement tag. Rerun a newer Release plan after the reserved release
+is published. Failed qualification or missing original artifacts cannot be bypassed.
+
 Add reviewed product notes as a new `changes/<descriptive-name>.md` fragment.
 CI collects fragments added since the preceding release and groups their named
 bullets under the supported sections. Fragments have no version heading or

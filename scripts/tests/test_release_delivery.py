@@ -30,6 +30,31 @@ def make_assets(root: pathlib.Path, extra_member: str | None = None) -> None:
 
 
 class ReleaseDeliveryTests(unittest.TestCase):
+    def test_release_discovery_includes_drafts_beyond_first_page(self):
+        draft = {"id": 17, "tag_name": "v0.0.8", "draft": True, "assets": []}
+        pages = [[{"id": 7, "tag_name": "v0.0.7", "draft": False}], [draft]]
+        with patch.object(publish_release, "run", return_value=json.dumps(pages).encode()) as run:
+            self.assertEqual(publish_release.find_release("v0.0.8"), draft)
+            run.assert_called_once_with("gh", "api", "repos/y2-intel/harness/releases?per_page=100", "--paginate", "--slurp")
+
+    def test_release_discovery_rejects_duplicate_drafts_for_same_tag(self):
+        pages = [[{"id": 17, "tag_name": "v0.0.8"}], [{"id": 18, "tag_name": "v0.0.8"}]]
+        with patch.object(publish_release, "run", return_value=json.dumps(pages).encode()):
+            with self.assertRaisesRegex(ValueError, "multiple releases"):
+                publish_release.find_release("v0.0.8")
+
+    def test_numeric_refresh_rejects_missing_or_changed_release_identity(self):
+        for release_id in (None, 0, -1, True, "17"):
+            with self.subTest(release_id=release_id), patch.object(publish_release, "api") as api:
+                with self.assertRaisesRegex(ValueError, "numeric ID"):
+                    publish_release.refresh_release({"id": release_id}, "v0.0.8")
+                api.assert_not_called()
+        for current in ({"id": 18, "tag_name": "v0.0.8"}, {"id": 17, "tag_name": "v0.0.9"}):
+            with self.subTest(current=current), patch.object(publish_release, "api", return_value=current) as api:
+                with self.assertRaisesRegex(ValueError, "identity changed"):
+                    publish_release.refresh_release({"id": 17}, "v0.0.8")
+                api.assert_called_once_with("releases/17")
+
     def test_publication_rejects_wrong_branch_or_event_source_before_any_mutation(self):
         source = "a" * 40
         environment = {
@@ -135,20 +160,74 @@ class ReleaseDeliveryTests(unittest.TestCase):
             make_assets(root)
             digests = verify_assets(root)
             starter = {"id": 123, "name": "y2-linux-x86_64.tar.gz", "size": 0, "state": "starter"}
-            draft = {"draft": True, "prerelease": False, "assets": [starter]}
-            complete = {"draft": True, "prerelease": False, "assets": [dict(name=name, state="uploaded", size=(root / name).stat().st_size, digest="sha256:" + digests[name]) for name in sorted(expected_assets())]}
+            draft = {"id": 17, "tag_name": "v0.0.8", "draft": True, "prerelease": False, "assets": [starter]}
+            complete = {**draft, "assets": [dict(name=name, state="uploaded", size=(root / name).stat().st_size, digest="sha256:" + digests[name]) for name in sorted(expected_assets())]}
             def optional(path):
                 if path == "git/ref/tags/v0.0.8": return {"object": {"type": "commit", "sha": source}}
-                if path == "releases/tags/v0.0.8": return draft
                 if path == "releases/latest": return {"tag_name": "v0.0.7"}
                 raise AssertionError(path)
-            with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", side_effect=optional), patch.object(publish_release, "api", return_value=complete), patch.object(publish_release, "run", return_value=b"") as run:
+            with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", side_effect=optional), patch.object(publish_release, "find_release", return_value=draft), patch.object(publish_release, "api", side_effect=[draft, complete]) as api, patch.object(publish_release, "run", return_value=b"") as run:
                 publish_release.publish({"tag": "v0.0.8", "source_sha": source}, root, root / "notes.md")
+            self.assertEqual([call.args for call in api.call_args_list], [("releases/17",), ("releases/17",)])
             calls = [call.args for call in run.call_args_list]
             self.assertEqual(calls[0], ("gh", "api", "repos/y2-intel/harness/releases/assets/123", "--method", "DELETE"))
             self.assertEqual(calls[1][:5], ("gh", "release", "upload", "v0.0.8", "--repo"))
             self.assertEqual(set(calls[1][6:]), {str(root / name) for name in expected_assets()})
             self.assertEqual(calls[2][:3], ("gh", "release", "edit"))
+
+    def test_new_and_existing_drafts_publish_without_release_by_tag_endpoint(self):
+        source = "a" * 40
+        for exists in (False, True):
+            with self.subTest(existing_draft=exists), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp)
+                make_assets(root)
+                digests = verify_assets(root)
+                draft = {"id": 17, "tag_name": "v0.0.8", "draft": True, "prerelease": False, "assets": []}
+                complete = {**draft, "assets": [dict(name=name, state="uploaded", size=(root / name).stat().st_size, digest="sha256:" + digests[name]) for name in sorted(expected_assets())]}
+                created = exists
+                uploaded = False
+                def optional(path):
+                    if path == "git/ref/tags/v0.0.8": return {"object": {"type": "commit", "sha": source}}
+                    if path == "releases/latest": return {"tag_name": "v0.0.7"}
+                    raise AssertionError(f"unexpected lookup: {path}")
+                def api(path):
+                    self.assertEqual(path, "releases/17")
+                    return complete if uploaded else draft
+                def run(*args):
+                    nonlocal created, uploaded
+                    if args == ("gh", "api", "repos/y2-intel/harness/releases?per_page=100", "--paginate", "--slurp"):
+                        return json.dumps([[{"id": 7, "tag_name": "v0.0.7"}], [draft] if created else []]).encode()
+                    if args[:3] == ("gh", "release", "create"):
+                        self.assertFalse(created, "existing draft must be reused")
+                        self.assertIn("--verify-tag", args)
+                        self.assertIn("--draft", args)
+                        created = True
+                    elif args[:3] == ("gh", "release", "upload"):
+                        self.assertTrue(created)
+                        self.assertEqual(set(args[6:]), {str(root / name) for name in expected_assets()})
+                        uploaded = True
+                    elif args[:3] == ("gh", "release", "edit"):
+                        self.assertTrue(uploaded, "publish only after complete asset validation")
+                        self.assertIn("--draft=false", args)
+                    else:
+                        raise AssertionError(args)
+                    return b""
+                with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", side_effect=optional), patch.object(publish_release, "api", side_effect=api) as api_mock, patch.object(publish_release, "run", side_effect=run) as run_mock:
+                    publish_release.publish({"tag": "v0.0.8", "source_sha": source}, root, root / "notes.md")
+                self.assertEqual(api_mock.call_count, 2)
+                calls = [call.args[:3] for call in run_mock.call_args_list]
+                self.assertEqual(calls.count(("gh", "release", "create")), 0 if exists else 1)
+                self.assertEqual(calls.count(("gh", "release", "edit")), 1)
+
+    def test_existing_tag_with_different_source_cannot_reach_draft_upload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            make_assets(root)
+            with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", return_value={"object": {"type": "commit", "sha": "b" * 40}}), patch.object(publish_release, "run") as run, patch.object(publish_release, "api") as api:
+                with self.assertRaisesRegex(ValueError, "never retag"):
+                    publish_release.publish({"tag": "v0.0.8", "source_sha": "a" * 40}, root, root / "notes.md")
+                run.assert_not_called()
+                api.assert_not_called()
 
     def test_recovery_never_deletes_published_uploaded_nonempty_or_unknown_assets(self):
         starter = {"id": 123, "name": "y2-linux-x86_64.tar.gz", "size": 0, "state": "starter"}

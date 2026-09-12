@@ -428,6 +428,15 @@ artifacts. Existing uploaded bytes are immutable; a full rebuild that produces
 different bytes cannot replace them. Out-of-order attempts fail before creating
 a tag when a newer source commit has already been published.
 
+If repairing publisher code requires a newer main commit, use **Recover Release**
+with the original Release run ID after the repair merges. Recovery requires all
+four-platform Full CI and PGSO qualification jobs to have passed. It downloads
+the original plan and archives, verifies their GitHub artifact digests, and
+resumes the existing draft and tag without rebuilding or retagging. Missing or
+expired artifacts, failed qualification, changed bytes, and source mismatches
+stop recovery. After the reserved release is published, rerun any newer Release
+run whose plan was held by that reserved tag.
+
 Add public product notes in a new `changes/<descriptive-name>.md` file with the
 supported changelog sections and named bullets below. CI collects only fragments
 added since the preceding release. Existing fragments are historical records;
