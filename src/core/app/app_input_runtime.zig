@@ -6091,31 +6091,35 @@ test "app_input_runtime staged model picker Enter ignores hidden slash skill mat
     try std.testing.expect(std.mem.find(u8, app.transcript.items, "Invalid /model selection") == null);
 }
 
-test "app_input_runtime Tab on bare model opens the staged picker" {
+test "app_input_runtime Tab on bare model and models alias opens the staged picker" {
     const alloc = std.testing.allocator;
-    var app = try RoutingFakeApp.init(alloc);
-    defer app.deinit();
-    app.model_completion_values = &.{"openai/gpt-5"};
-    try app.input_runtime.textReplacementState().replace(alloc, "/model");
+    for ([_][]const u8{ "/model", "/models" }) |command| {
+        var app = try RoutingFakeApp.init(alloc);
+        defer app.deinit();
+        app.model_completion_values = &.{"openai/gpt-5"};
+        try app.input_runtime.textReplacementState().replace(alloc, command);
 
-    try Runtime(RoutingFakeApp).handleByte(&app, '\t', 4096, 100);
+        try Runtime(RoutingFakeApp).handleByte(&app, '\t', 4096, 100);
 
-    try std.testing.expectEqualStrings("/model ", app.input_runtime.edit_state.input.items);
-    try std.testing.expect(app.input_runtime.picker.activeModelPickerQuery(&app.input_runtime.edit_state) != null);
-    try std.testing.expect(!app.model_cache.menu.active);
+        try std.testing.expectEqualStrings("/model ", app.input_runtime.edit_state.input.items);
+        try std.testing.expect(app.input_runtime.picker.activeModelPickerQuery(&app.input_runtime.edit_state) != null);
+        try std.testing.expect(!app.model_cache.menu.active);
+    }
 }
 
-test "app_input_runtime Enter on bare model opens the browse catalog" {
+test "app_input_runtime Enter on bare model and models alias opens the browse catalog" {
     const alloc = std.testing.allocator;
-    var app = try RoutingFakeApp.init(alloc);
-    defer app.deinit();
-    try app.input_runtime.textReplacementState().replace(alloc, "/model");
+    for ([_][]const u8{ "/model", "/models", "  /MODELS" }) |command| {
+        var app = try RoutingFakeApp.init(alloc);
+        defer app.deinit();
+        try app.input_runtime.textReplacementState().replace(alloc, command);
 
-    try Runtime(RoutingFakeApp).handleByte(&app, '\r', 4096, 100);
+        try Runtime(RoutingFakeApp).handleByte(&app, '\r', 4096, 100);
 
-    try std.testing.expect(app.model_cache.menu.active);
-    try std.testing.expectEqualStrings("", app.input_runtime.edit_state.input.items);
-    try std.testing.expect(app.input_runtime.picker.activeModelPickerQuery(&app.input_runtime.edit_state) == null);
+        try std.testing.expect(app.model_cache.menu.active);
+        try std.testing.expectEqualStrings("", app.input_runtime.edit_state.input.items);
+        try std.testing.expect(app.input_runtime.picker.activeModelPickerQuery(&app.input_runtime.edit_state) == null);
+    }
 }
 
 test "app_input_runtime Enter on selected model slash completion opens browse on first try" {

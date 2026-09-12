@@ -1709,8 +1709,12 @@ describe.skipIf(!tmuxAvailable())("TUI gateway stream lifecycle", () => {
         .sort()
         .map((name) => readFileSync(join(framesRoot, "frames", name), "utf8"));
       const prefixLength = (grid: string): number => {
-        for (let count = renderedSentence.length; count > 0; count -= 1) {
-          if (grid.includes(renderedSentence.slice(0, count))) return count;
+        if (grid.includes(renderedSentence)) return renderedSentence.length;
+        const rows = grid.split("\n").map((row) => row.trim().replace(/^[│┃]\s?/, ""));
+        for (let count = renderedSentence.length - 1; count > 0; count -= 1) {
+          // A partial assistant row must end at the prefix. An unrelated
+          // capital P in startup or activity text is not paced output.
+          if (rows.includes(renderedSentence.slice(0, count))) return count;
         }
         return 0;
       };
@@ -3080,11 +3084,19 @@ describe.skipIf(!tmuxAvailable())("TUI gateway stream lifecycle", () => {
       expect(repairedResults).toEqual([
         expect.objectContaining({
           output: expect.objectContaining({
-            type: "error-text",
+            type: "text",
             value: expect.stringContaining("tool_execution_failed"),
           }),
         }),
       ]);
+      const repairedOutput = repairedResults[0]!.output as { value: string };
+      expect(JSON.parse(repairedOutput.value)).toMatchObject({
+        error: {
+          type: "tool_execution_failed",
+          tool_name: "list_files",
+          message: "Tool arguments were not valid JSON.",
+        },
+      });
       expect(queuedGateway.requests[4].body).not.toContain(duplicateArguments);
       expect(trace).toContain("event=argument_integrity_rejected");
       expect(trace).toContain("failure=malformed_json");

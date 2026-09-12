@@ -2567,8 +2567,7 @@ test.skipIf(!tmuxAvailable())(
         if (/^└ (?:Running|Ran) /.test(row)) return "<command status>";
         if (/^│  \d+ output lines$/.test(row)) return "<output count>";
         if (/^│  \d+ more lines · → to expand$/.test(row)) return "<fold count>";
-        if (row.includes("enter queue · ctrl+enter steer")) return "<status line>";
-        if (/^(?:auto · )?gpt-5$/.test(row)) return "<status line>";
+        if (/^(?:enter queue · )?(?:auto · )?gpt-5$/.test(row)) return "<status line>";
         return row;
       });
       const normalizedBefore = normalizeLiveMetadata(readingBefore);
@@ -2578,6 +2577,7 @@ test.skipIf(!tmuxAvailable())(
       }
       for (const index of [1, 2, 3]) {
         const marker = `│ ${lineMarker} ${String(index).padStart(3, "0")}`;
+        expect(readingBefore.indexOf(marker)).toBeGreaterThanOrEqual(0);
         expect(readingAfter.indexOf(marker)).toBe(readingBefore.indexOf(marker));
       }
 

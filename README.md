@@ -159,7 +159,7 @@ Inside a saved session, `/permissions remember <allow|deny> <tool-name> <argumen
 
 The `/model` picker accepts `/models` as a compatibility alias. Both open the same model and reasoning-effort picker; `y2 models` remains available for text and JSON catalog output.
 
-The local usage ledger includes token and request counts reported by Agent Y2, direct OpenAI-compatible endpoints, and subscription providers. When an endpoint does not report pricing, usage remains marked incomplete and spend includes only known costs.
+The native CLI's local usage ledger includes token and request counts reported by Agent Y2, direct OpenAI-compatible endpoints, and subscription providers, including separately streamed direct-endpoint usage totals. Missing or late totals and unreported pricing remain marked incomplete; spend includes only known costs.
 
 ## Embed y2
 

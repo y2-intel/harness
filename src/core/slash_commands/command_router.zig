@@ -213,8 +213,15 @@ test "parse extracts an optional logout provider" {
     }
 }
 
-test "parse rejects removed plural model command" {
-    try std.testing.expectEqual(ParsedCommand.unknown, parse(testSlashRegistry(), "/models"));
+test "parse preserves the plural model command alias and optional query" {
+    switch (parse(testSlashRegistry(), "/models")) {
+        .model => |query| try std.testing.expectEqualStrings("", query),
+        else => return error.TestExpectedEqual,
+    }
+    switch (parse(testSlashRegistry(), "/models y2-agent")) {
+        .model => |query| try std.testing.expectEqualStrings("y2-agent", query),
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "parse leaves provider selection to setup" {

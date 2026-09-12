@@ -49,7 +49,8 @@ This table records selected changes applied beyond the merge boundary. It does n
 ## Compatibility adaptations
 
 - Preserve native SDK workspace scope and collect every ACP session-list page behind the existing `listSessions()` array API. Keep relative workspace paths and immutable request events supported.
-- Record direct endpoint token counts through a typed reported-usage outcome. Endpoint-scoped response identities prevent collisions; unknown prices remain incomplete, and durable publication remains idempotent.
+- Record native direct endpoint token counts through a typed reported-usage outcome. Endpoint-scoped response identities prevent collisions; unknown prices remain incomplete, and durable publication remains idempotent. Native requests allow one second after completion for a separate usage trailer. Missing or late trailers retain the completed answer and leave usage incomplete. SDK host transports keep returning at completion and do not collect a separately delayed trailer.
+- Bound native response-header acquisition to 30 seconds or an earlier request deadline so a silent server enters the existing recovery flow. This header deadline does not cap the duration of the streamed answer.
 - Keep the original complete terminal start schema and explicit write-lease forms alongside the new atomic input form. Retain the existing `mcp_search_tools` advertisement alongside additive capability discovery.
 
 ## Validation requirements

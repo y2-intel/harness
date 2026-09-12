@@ -1486,7 +1486,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       await session.waitForComposer(10_000);
 
       await session.sendText("/help");
-      let grid = await waitForHelpMenu(session, 36);
+      let grid = await waitForHelpMenu(session, 35);
       let pane = grid.join("\n");
       expect(pane).toContain("Y2 INFORMATION DOMINANCE");
       expect(pane).toContain("Run /help for commands");
@@ -1502,7 +1502,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       grid = await waitForHelpMenu(session, 5);
       expect(grid.join("\n")).toContain("[General]");
       await session.sendKeys("BTab");
-      grid = await waitForHelpMenu(session, 36);
+      grid = await waitForHelpMenu(session, 35);
       expect(grid.join("\n")).toContain("[All]");
 
       await session.sendLiteralText("clipboard");
@@ -1513,7 +1513,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       expect(pane).not.toContain("/clear");
 
       await session.sendKeys("C-u");
-      await waitForHelpMenu(session, 36);
+      await waitForHelpMenu(session, 35);
       await session.sendKeys("Down");
       await session.sendKeys("Enter");
       pane = await session.waitForPane(
@@ -1526,7 +1526,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
 
       await session.sendKeys("C-u");
       await session.sendText("/help");
-      await waitForHelpMenu(session, 36);
+      await waitForHelpMenu(session, 35);
       await session.sendLiteralText("additional directories");
       await waitForHelpMenu(session, 1);
       await session.sendKeys("Enter");
@@ -1543,7 +1543,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
 
       await session.sendKeys("C-u");
       await session.sendText("/help");
-      await waitForHelpMenu(session, 36);
+      await waitForHelpMenu(session, 35);
       await session.sendLiteralText("no command can match this query");
       await session.waitForText("No commands found.", 5_000);
       await session.sendKeys("Escape");
@@ -2548,7 +2548,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       expect(alternateCount("\x1b[?1049l")).toBe(leavesBeforeSkills);
 
       await session.sendText("/help");
-      grid = await waitForHelpMenu(session, 36);
+      grid = await waitForHelpMenu(session, 35);
       expect(grid.join("\n")).toContain("Run /help for commands");
       expect(alternateCount("\x1b[?1049h")).toBe(entersBeforeSkills);
       expect(alternateCount("\x1b[?1049l")).toBe(leavesBeforeSkills);
@@ -2706,6 +2706,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
           Y2_RECORD: fixture.tapePath,
           Y2_RECORD_INPUT: "1",
         },
+        stderrPath: fixture.stderrPath,
         width: 120,
         height: 32,
       });
@@ -2790,12 +2791,15 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       await waitForModelsMenu(session, 4);
       await session.sendKeys("Down");
       await session.sendKeys("Enter");
-      await session.waitForPane(
-        (current) => composerContains(current, `/model ${currentModel}`) && current.includes("default"),
+      pane = await session.waitForPane(
+        (current) => current.includes(`● Switched to ${currentModel}`) && hasEmptyComposer(current),
         5_000,
       );
+      // Standard OpenAI model listings do not declare reasoning controls.
+      expect(pane).not.toContain("Reasoning effort");
+      expect(pane).not.toContain("Tab Provider");
 
-      await session.sendText("/model");
+      await session.sendText("/models");
       await waitForModelsMenu(session, 4);
       await session.sendLiteralText(selectedModel);
       await waitForModelsMenu(session, 1);
@@ -2810,6 +2814,7 @@ describe.skipIf(SKIP)("tui: slash menu", () => {
       await session.sendText("/quit");
       expect(await session.waitForSessionEnd(TIMEOUT)).toBe(true);
       session = null;
+      expect(readFileSync(fixture.stderrPath, "utf8")).toBe("");
       expect(existsSync(fixture.tapePath)).toBe(true);
       const replay = JSON.parse(
         execFileSync(Y2_BIN, ["replay", fixture.tapePath, "--json"], { encoding: "utf8" }),

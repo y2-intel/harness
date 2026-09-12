@@ -840,7 +840,7 @@ describe("gateway stream lifecycle", () => {
       expect(serializedToolNames(oracleRequest)).toEqual(
         [...FULL_WITHOUT_DURABLE_TOOLS_SERIALIZED_TOOL_NAMES, "vision"],
       );
-      expect(request.tools).toHaveLength(24);
+      expect(request.tools).toHaveLength(25);
       expect(findUnavailableCapabilityReferences(oracleRequest)).toEqual([]);
       expect(request.prompt[0]?.role).toBe("system");
       expect(toolByName(oracleRequest, "terminal")?.description).toBe(

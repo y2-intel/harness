@@ -33,6 +33,11 @@ const profileStoredKeyTmuxTest = test.skipIf(!HAS_TMUX || process.platform === "
 const TIMEOUT = 30_000;
 const ENV_TOKEN = "env-api-key-token";
 
+function activeModelCatalog(pane: string): string {
+  // Inline catalogs share the viewport with earlier provider-switch notices.
+  return pane.match(/^Models \d+[^\n]*\n[\s\S]*?^.*↑↓ Navigate.*Tab Provider.*Esc Close.*$/m)?.[0] ?? "";
+}
+
 function grokSubscriptionModel(id: string, contextWindow: number, efforts: string[] = []) {
   return {
     id,
@@ -1002,15 +1007,17 @@ tmuxTest(
       );
     }
     await session.sendText("/models");
-    const codexCatalog = await session.waitForPane(
-      (pane) =>
-        pane.includes("Models") &&
-        pane.includes("gpt-5.6-sol") &&
-        pane.includes("gpt-5.4-mini") &&
-        !pane.includes("openai/gpt-5.6-sol"),
+    const codexPane = await session.waitForPane(
+      (pane) => {
+        const catalog = activeModelCatalog(pane);
+        return catalog.includes("gpt-5.6-sol") && catalog.includes("gpt-5.4-mini");
+      },
       TIMEOUT,
     );
+    const codexCatalog = activeModelCatalog(codexPane);
+    expect(codexCatalog).toContain("Models 2");
     expect(codexCatalog).toContain("[All]");
+    expect(codexCatalog).not.toContain("openai/gpt-5.6-sol");
     for (const vendor of ["Anthropic", "OpenAI", "xAI", "Z.AI", "Others"]) {
       expect(codexCatalog).not.toContain(vendor);
     }
@@ -1630,10 +1637,13 @@ tmuxTest(
       await session.sendKeys("Enter");
       await session.waitForText("Switched to Grok subscription with grok-4.20.", TIMEOUT);
       await session.sendText("/model");
-      const grokCatalog = await session.waitForPane(
-        (pane) => pane.includes("Models") && pane.includes("grok-4.20"),
+      const grokPane = await session.waitForPane(
+        (pane) => activeModelCatalog(pane).includes("grok-4.20"),
         TIMEOUT,
       );
+      const grokCatalog = activeModelCatalog(grokPane);
+      expect(grokCatalog).toContain("Models 2");
+      expect(grokCatalog).toContain("grok-4.6");
       expect(grokCatalog).toContain("[All]");
       for (const vendor of ["Anthropic", "OpenAI", "xAI", "Z.AI", "Others"]) {
         expect(grokCatalog).not.toContain(vendor);
@@ -2111,27 +2121,37 @@ test(
     const workspace = join(home, "workspace");
     mkdirSync(workspace, { recursive: true });
     gateway = startFakeGateway([
-      fakeGatewaySse([
-        {
-          type: "response-metadata",
-          modelId: FAKE_GATEWAY_MODEL,
-          timestamp: new Date().toISOString(),
-        },
-        {
-          type: "text-start",
-          id: "gateway_answer",
-        },
-        { type: "text-delta", id: "gateway_answer", delta: "GATEWAY_USAGE_OK" },
-        { type: "text-end", id: "gateway_answer" },
-        {
-          type: "finish",
-          finishReason: { unified: "stop", raw: "stop" },
-          usage: {
-            inputTokens: { total: 13 },
-            outputTokens: { total: 4 },
+      (body) => {
+        expect(JSON.parse(body).stream_options).toEqual({ include_usage: true });
+        const encoder = new TextEncoder();
+        const frame = (value: unknown) => encoder.encode(`data: ${JSON.stringify(value)}\n\n`);
+        let timer: ReturnType<typeof setTimeout>;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(frame({
+              id: "chat-usage-profile",
+              choices: [{ index: 0, delta: { content: "GATEWAY_USAGE_OK" }, finish_reason: null }],
+              usage: null,
+            }));
+            controller.enqueue(frame({
+              id: "chat-usage-profile",
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              usage: null,
+            }));
+            // OpenAI sends usage in a separate chunk after the choice finishes.
+            timer = setTimeout(() => {
+              controller.enqueue(frame({
+                id: "chat-usage-profile",
+                choices: [],
+                usage: { prompt_tokens: 13, completion_tokens: 4, total_tokens: 17 },
+              }));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            }, 50);
           },
-        },
-      ]),
+          cancel() { clearTimeout(timer); },
+        }), { headers: { "content-type": "text/event-stream" } });
+      },
     ]);
     const codex = startFakeDirectUsageProvider(
       "codex",
@@ -2223,6 +2243,56 @@ test(
     }
   },
   60_000,
+);
+
+test(
+  "direct finished streams without usage trailers return before the connection closes",
+  async () => {
+    home = mkdtempSync(join(tmpdir(), "y2-direct-usage-timeout-"));
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const encoder = new TextEncoder();
+    gateway = startFakeGateway([
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            id: "chat-no-usage",
+            choices: [{ index: 0, delta: { content: "FINISHED_WITHOUT_USAGE_OK" }, finish_reason: "stop" }],
+            usage: null,
+          })}\n\n`));
+          // Remain open indefinitely: optional usage must not hold the answer.
+        },
+      }), { headers: { "content-type": "text/event-stream" } }),
+    ]);
+    const result = await runY2(["ask", "--json", "Return FINISHED_WITHOUT_USAGE_OK."], {
+      cwd: workspace,
+      env: {
+        HOME: home,
+        OPENAI_API_KEY: "direct-usage-key",
+        Y2_DISABLE_KEYCHAIN: "1",
+        Y2_AUTO_UPGRADE: "0",
+        Y2_API_CHAT_URL: gateway.chatUrl,
+        Y2_MODEL: FAKE_GATEWAY_MODEL,
+      },
+      timeoutMs: 5_000,
+    });
+    expect(result.code, `stdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("FINISHED_WITHOUT_USAGE_OK");
+    expect(result.stderr).toBe("");
+    expect(gateway.requests).toHaveLength(1);
+    const usage = await runY2(["usage", "--json", "--period", "24h"], {
+      cwd: workspace,
+      env: { HOME: home },
+      timeoutMs: TIMEOUT,
+    });
+    expect(usage.code, usage.stderr).toBe(0);
+    expect(usage.stderr).toBe("");
+    expect(JSON.parse(usage.stdout)).toMatchObject({
+      completeness: "incomplete",
+      totals: { input_tokens: 0, output_tokens: 0, request_count: 0, spend: 0 },
+    });
+  },
+  15_000,
 );
 
 test(
