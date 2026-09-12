@@ -1,0 +1,53 @@
+name: Recover Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Original Release run with all qualification jobs passed
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stable-release
+  queue: max
+
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main' && github.repository == 'y2-intel/harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify qualification and recover original artifacts
+        run: |
+          python3 scripts/release_recovery.py --run-id "$RELEASE_RUN_ID" \
+            --output "$RUNNER_TEMP/qualified-release"
+
+      - name: Generate original product notes
+        run: |
+          python3 scripts/release_notes.py \
+            --plan "$RUNNER_TEMP/qualified-release/release-plan.json" \
+            --output "$RUNNER_TEMP/release-notes.md"
+
+      - name: Resume publication without rebuilding or retagging
+        run: |
+          python3 scripts/publish_release.py \
+            --qualified-run "$RELEASE_RUN_ID" \
+            --plan "$RUNNER_TEMP/qualified-release/release-plan.json" \
+            --assets "$RUNNER_TEMP/qualified-release/assets" \
+            --notes "$RUNNER_TEMP/release-notes.md"

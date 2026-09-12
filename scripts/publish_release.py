@@ -10,6 +10,12 @@ import pathlib
 import re
 import subprocess
 import tarfile
+import tempfile
+
+if __package__:
+    from . import release_recovery
+else:
+    import release_recovery
 
 
 REPOSITORY = "y2-intel/harness"
@@ -73,6 +79,25 @@ def optional_api(path: str) -> dict | None:
     raise RuntimeError(f"could not inspect {path}: {result.stderr.decode().strip()}")
 
 
+def find_release(tag: str) -> dict | None:
+    # GitHub's release-by-tag endpoint excludes unpublished drafts.
+    pages = json.loads(run("gh", "api", f"repos/{REPOSITORY}/releases?per_page=100", "--paginate", "--slurp"))
+    matches = [release for page in pages for release in page if release.get("tag_name") == tag]
+    if len(matches) > 1:
+        raise ValueError(f"multiple releases use the planned tag: {tag}")
+    return matches[0] if matches else None
+
+
+def refresh_release(release: dict, tag: str) -> dict:
+    release_id = release.get("id")
+    if type(release_id) is not int or release_id <= 0:
+        raise ValueError("release is missing a valid numeric ID")
+    current = api(f"releases/{release_id}")
+    if current.get("id") != release_id or current.get("tag_name") != tag:
+        raise ValueError("release identity changed during publication")
+    return current
+
+
 def validate_remote_assets(release: dict, digests: dict[str, str], directory: pathlib.Path) -> set[str]:
     existing = set()
     for asset in release.get("assets", []):
@@ -122,20 +147,30 @@ def tag_commit(tag: str) -> str:
     return obj["sha"]
 
 
-def validate_publish_source(source: str, tag: str) -> None:
+def validate_publish_source(source: str, tag: str, *, qualified_run: int | None = None) -> None:
+    delivery_source = os.environ.get("GITHUB_SHA")
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
         or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY
         or os.environ.get("GITHUB_REF") != "refs/heads/main"
-        or os.environ.get("GITHUB_SHA") != source
+        or not re.fullmatch(r"[0-9a-f]{40}", delivery_source or "")
+        or (qualified_run is None and delivery_source != source)
     ):
         raise ValueError("release publication requires canonical main CI at the exact plan source")
-    if run("git", "rev-parse", "HEAD").decode().strip() != source:
+    if qualified_run is not None and (
+        type(qualified_run) is not int or qualified_run <= 0
+        or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+        or os.environ.get("GITHUB_WORKFLOW_REF") != f"{REPOSITORY}/.github/workflows/recover-release.yml@refs/heads/main"
+    ):
+        raise ValueError("qualified recovery requires the canonical main recovery workflow")
+    if run("git", "rev-parse", "HEAD").decode().strip() != delivery_source:
         raise ValueError("release plan does not match the checked-out source")
     run("git", "fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main")
     history = run("git", "rev-list", "--first-parent", "refs/remotes/origin/main").decode().splitlines()
     if source not in history:
         raise ValueError("release source is not on the current origin/main first-parent lineage")
+    if delivery_source not in history or history.index(delivery_source) > history.index(source):
+        raise ValueError("delivery source must follow the release on current origin/main")
     source_ancestors = set(history[history.index(source):])
     main_ancestors = set(history)
     pages = json.loads(run("gh", "api", f"repos/{REPOSITORY}/releases?per_page=100", "--paginate", "--slurp"))
@@ -159,16 +194,25 @@ def validate_publish_source(source: str, tag: str) -> None:
         raise ValueError("refusing to publish a version below the latest Y2 release")
 
 
-def publish(plan: dict, assets: pathlib.Path, notes: pathlib.Path) -> None:
+def publish(plan: dict, assets: pathlib.Path, notes: pathlib.Path, *, qualified_run: int | None = None) -> None:
     tag, source = plan["tag"], plan["source_sha"]
     if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
         raise ValueError("invalid release tag")
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise ValueError("release plan requires a full source SHA")
-    validate_publish_source(source, tag)
+    validate_publish_source(source, tag, qualified_run=qualified_run)
     digests = verify_assets(assets)
+    if qualified_run is not None:
+        # Revalidate immediately before publication; workflow inputs are not proof.
+        with tempfile.TemporaryDirectory(prefix="y2-qualified-release-") as temp:
+            original = pathlib.Path(temp)
+            original_plan = release_recovery.download_qualified_inputs(qualified_run, original)
+            if plan != original_plan or digests != verify_assets(original / "assets"):
+                raise ValueError("recovery must reuse the exact qualified plan and artifact bytes")
     reference = optional_api(f"git/ref/tags/{tag}")
     if reference is None:
+        if qualified_run is not None:
+            raise ValueError("recovery requires an existing immutable release tag")
         api("git/refs", payload={"ref": f"refs/tags/{tag}", "sha": source})
     else:
         obj = reference["object"]
@@ -176,10 +220,17 @@ def publish(plan: dict, assets: pathlib.Path, notes: pathlib.Path) -> None:
             obj = api(f"git/tags/{obj['sha']}")["object"]
         if obj["type"] != "commit" or obj["sha"] != source:
             raise ValueError("release tag points to different source; never retag")
-    release = optional_api(f"releases/tags/{tag}")
+    release = find_release(tag)
     if release is None:
+        if qualified_run is not None:
+            raise ValueError("recovery requires an existing release draft")
         run("gh", "release", "create", tag, "--repo", REPOSITORY, "--verify-tag", "--draft", "--title", tag, "--notes-file", str(notes))
-        release = api(f"releases/tags/{tag}")
+        release = find_release(tag)
+        if release is None:
+            raise ValueError("created draft release could not be found")
+    release = refresh_release(release, tag)
+    if qualified_run is not None and release.get("draft") is not True:
+        raise ValueError("recovery requires an unpublished release draft")
     if release.get("prerelease"):
         raise ValueError("stable release tag is already a prerelease")
     release = remove_empty_draft_uploads(release)
@@ -187,7 +238,7 @@ def publish(plan: dict, assets: pathlib.Path, notes: pathlib.Path) -> None:
     missing = sorted(expected_assets() - existing)
     if missing:
         run("gh", "release", "upload", tag, "--repo", REPOSITORY, *(str(assets / name) for name in missing))
-    release = api(f"releases/tags/{tag}")
+    release = refresh_release(release, tag)
     if validate_remote_assets(release, digests, assets) != expected_assets():
         raise ValueError("release assets are incomplete")
     latest = optional_api("releases/latest")
@@ -204,8 +255,9 @@ def main() -> None:
     parser.add_argument("--plan", type=pathlib.Path, required=True)
     parser.add_argument("--assets", type=pathlib.Path, required=True)
     parser.add_argument("--notes", type=pathlib.Path, required=True)
+    parser.add_argument("--qualified-run", type=int, help="Recover original artifacts from a fully qualified Release run")
     args = parser.parse_args()
-    publish(json.loads(args.plan.read_text()), args.assets, args.notes)
+    publish(json.loads(args.plan.read_text()), args.assets, args.notes, qualified_run=args.qualified_run)
 
 
 if __name__ == "__main__":

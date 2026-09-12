@@ -62,7 +62,7 @@ jobs:
         run: ./scripts/check-public-surface.sh
 
       - name: Test release planning and delivery
-        run: python3 -m unittest scripts.tests.test_release scripts.tests.test_release_delivery -q
+        run: python3 -m unittest scripts.tests.test_release scripts.tests.test_release_delivery scripts.tests.test_release_recovery -q
 
       - name: Build
         shell: bash
