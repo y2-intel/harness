@@ -5,6 +5,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.pgso.model import PgsoError, sha256_file
 from scripts.pgso.pipeline import (
@@ -27,15 +28,18 @@ from scripts.pgso.pipeline import (
     parse_compiler_runtime,
     profile_use_argv,
     reject_profile_outputs,
+    read_app_version,
     validate_archive_unchanged,
     validate_bitcode_hash,
     validate_candidate_metadata,
     validate_candidate_size,
     validate_profile_section_alignment,
     verify_release_safe_ir,
+    verify_candidate,
     zig_build_argv,
 )
 from scripts.pgso.toolchain import Toolchain
+from scripts.pgso.runner import CommandResult
 
 
 class PgsoPipelineTests(unittest.TestCase):
@@ -207,6 +211,56 @@ class PgsoPipelineTests(unittest.TestCase):
             control[control.index("--cache-dir") + 1],
             ir[ir.index("--cache-dir") + 1],
         )
+
+    def test_version_override_reaches_both_control_and_seed_ir(self) -> None:
+        spec = dataclasses.replace(self.spec, app_version="0.0.8")
+        for emit_ir in (False, True):
+            argv = zig_build_argv(self.toolchain, spec, self.paths, emit_ir=emit_ir)
+            self.assertEqual(1, argv.count("-Dapp-version=0.0.8"))
+        with self.assertRaises(PgsoError):
+            dataclasses.replace(self.spec, app_version="0.0.8-dev")
+
+    def test_control_version_must_match_the_requested_version(self) -> None:
+        result = CommandResult(
+            argv=(), returncode=0, stdout="0.0.8\n", stderr="", elapsed_seconds=0.1,
+        )
+        with mock.patch("scripts.pgso.pipeline.run_checked", return_value=result):
+            self.assertEqual("0.0.8", read_app_version(self.paths.control_binary, self.paths))
+            self.assertEqual(
+                "0.0.8",
+                read_app_version(self.paths.control_binary, self.paths, expected="0.0.8"),
+            )
+            with self.assertRaisesRegex(PgsoError, "app version mismatch"):
+                read_app_version(self.paths.control_binary, self.paths, expected="0.0.9")
+
+    def test_candidate_qualification_requires_the_seed_app_version(self) -> None:
+        self.paths.candidate_binary.write_bytes(b"candidate")
+        for actual in ("0.0.8", "0.0.7", "0.0.8-dev"):
+            with self.subTest(actual=actual):
+                outputs = (
+                    "", "ARM64", "LC_BUILD_VERSION\nminos 13.0",
+                    "/usr/lib/libSystem.B.dylib", "Usage: y2", actual + "\n",
+                )
+                results = [
+                    CommandResult(
+                        argv=(), returncode=0, stdout=output,
+                        stderr="", elapsed_seconds=0.1,
+                    )
+                    for output in outputs
+                ]
+                with mock.patch("scripts.pgso.pipeline.run_checked", side_effect=results):
+                    if actual == "0.0.8":
+                        evidence = verify_candidate(
+                            self.toolchain, self.paths,
+                            expected_minos="13.0", expected_app_version="0.0.8",
+                        )
+                        self.assertEqual(actual, evidence.version_output)
+                    else:
+                        with self.assertRaisesRegex(PgsoError, "app version"):
+                            verify_candidate(
+                                self.toolchain, self.paths,
+                                expected_minos="13.0", expected_app_version="0.0.8",
+                            )
 
     def test_benchmark_artifacts_use_their_existing_build_owners_and_names(self) -> None:
         cases = (

@@ -369,37 +369,34 @@ Do not document intended behavior as if it already exists.
 
 ## Releasing
 
-Releases use a two-workflow pipeline. The maintainer controls the changelog voice and format.
+Every push to `main` triggers `.github/workflows/release.yml`. The workflow
+computes the next version from published stable Y2 releases on first-parent
+history: patch by default, `#minor` for a minor bump, or `#major` for a major bump.
+Markers belong in commit messages on that history; for a merged PR, use its title
+or merge commit message. Major takes precedence. Imported upstream tags do not
+set the Y2 release version.
 
-### Automated flow (preferred)
+Do not hardcode the next release version in source or create version-bump commits.
+CI passes its computed version through `-Dapp-version` to native, SDK, and PGSO
+builds. Local builds derive a version from the nearest strict first-parent SemVer
+tag, or use `0.0.0` when no Git version metadata is available.
 
-1. Go to **Actions > Prepare Release** on GitHub
-2. Select the bump type (`patch`, `minor`, or `major`) and run the workflow
-3. The workflow bumps the version, feeds the actual `git diff` to an LLM to draft the changelog, and opens a PR
-4. Review the PR — edit the AI-drafted changelog if needed — then merge
-5. The existing `release.yml` detects the version change and handles build, publish, tagging, and the GitHub Release
+The release workflow runs Full CI on the exact source SHA with that version,
+builds all four platform archives, qualifies macOS arm64 PGSO, creates the
+immutable tag, verifies every archive and checksum in a draft release, then
+publishes it. Retries reuse the same source/tag and never replace a tag or
+conflicting uploaded bytes. Never create tags manually.
 
-The `prepare-release.yml` workflow uses Agent Y2 by default with the
-`Y2_API_KEY` secret. Maintainers may instead configure a direct
-OpenAI-compatible endpoint with the `RELEASE_API_URL` and `RELEASE_MODEL`
-repository variables plus the `OPENAI_API_KEY` secret. It generates the
-changelog from the real code diff, not from commit messages or PR descriptions.
-
-### Manual flow
-
-To prepare a release by hand:
-
-1. Create a branch (e.g. `prepare-v0.3.0`)
-2. Bump `pub const version` in `src/main.zig`
-3. Write the changelog entry in `CHANGELOG.md` at the top, under a new `## <version>` heading, wrapped in `<!-- release:start -->` and `<!-- release:end -->` markers. Remove the markers from the previous release entry so only the new release has them.
-4. Update `README.md` install example version
-5. Open a PR and merge to `main`
-
-When the PR merges, CI compares the version tag to what exists in git. If the tag is missing, it cross-compiles all platform binaries, creates the git tag, and publishes a GitHub Release with the binaries attached. The release body is extracted from the content between the `<!-- release:start -->` and `<!-- release:end -->` markers in `CHANGELOG.md`.
+Add reviewed product notes as a new `changes/<descriptive-name>.md` fragment.
+CI collects fragments added since the preceding release and groups their named
+bullets under the supported sections. Fragments have no version heading or
+release markers. Keep historical fragments unchanged. A maintenance-only release
+without a new public outcome does not need a product bullet. `CHANGELOG.md`
+retains the earlier versioned history.
 
 ### Writing the changelog
 
-Whether automated or manual, the changelog is public product copy. Describe observable user behavior, not the engineering process behind it. Use the diff, commits, and merged pull requests as research evidence only.
+Release-note fragments are public product copy. Describe observable user behavior, not the engineering process behind it. Use the diff, commits, and merged pull requests as research evidence only.
 
 Public changelog entries must:
 
@@ -410,18 +407,12 @@ Public changelog entries must:
 * Omit internal details such as repository moves, website or marketing work, CDN layout, CI workflows, test fixtures, branch history, and implementation-only refactors. Translate relevant work into its public user outcome or leave it out.
 * Avoid forcing every merged change into the notes. A change without a public user outcome does not need a bullet.
 
-Only the current release should have markers; remove `<!-- release:start -->` and `<!-- release:end -->` from any previous entry:
+A fragment uses the relevant sections directly:
 
 ```markdown
-## 0.3.0
-
-<!-- release:start -->
 ### New Features
 
 - **Interactive terminal startup:** Start an interactive shell when the `terminal` tool receives an empty command
-<!-- release:end -->
-
-## 0.2.5
 
 ### Improvements
 

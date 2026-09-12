@@ -574,7 +574,7 @@ class PgsoQualificationTests(unittest.TestCase):
                 side_effect=AssertionError("ordinary control build is wasteful"),
                 create=True,
             ),
-            mock.patch("scripts.pgso.qualify.emit_bitcode", return_value="b" * 64),
+            mock.patch("scripts.pgso.qualify.emit_bitcode", return_value="b" * 64) as emit,
             mock.patch(
                 "scripts.pgso.qualify.build_external_o2_control",
                 return_value=external,
@@ -591,18 +591,20 @@ class PgsoQualificationTests(unittest.TestCase):
             mock.patch("scripts.pgso.qualify.apply_profile"),
             mock.patch("scripts.pgso.qualify.link_candidate", return_value=candidate),
         ):
-            pair = build_benchmark_pair(object(), self.root, output, plan)
+            pair = build_benchmark_pair(object(), self.root, output, plan, app_version="0.0.8")
 
         self.assertEqual(external, pair.control_binary)
         self.assertEqual(external, read_minos.call_args.args[1])
         self.assertEqual("15.0", instrument.call_args.args[2])
+        self.assertTrue(all(call.args[1].app_version == "0.0.8" for call in emit.call_args_list))
 
     def test_builds_all_profile_linked_benchmarks_before_candidate_link(self) -> None:
         paths = PipelinePaths.create(self.root / "run")
         paths.merged_profile.write_bytes(b"production profile")
         built_selectors: list[str] = []
 
-        def fake_build(_toolchain, _repo_root, output_dir, plan):
+        def fake_build(_toolchain, _repo_root, output_dir, plan, *, app_version):
+            self.assertEqual("0.0.8", app_version)
             built_selectors.append(plan.selector)
             control = output_dir / "external-control" / plan.profile_module
             candidate = output_dir / "candidate" / plan.profile_module
@@ -647,6 +649,7 @@ class PgsoQualificationTests(unittest.TestCase):
                 object(),
                 self.root,
                 paths,
+                app_version="0.0.8",
             )
 
         self.assertEqual(

@@ -600,9 +600,11 @@ def build_benchmark_pair(
     repo_root: pathlib.Path,
     output_root: pathlib.Path,
     plan: BenchmarkPlan,
+    *,
+    app_version: str | None = None,
 ) -> BenchmarkPair:
     paths = PipelinePaths.create(output_root, selector=plan.selector)
-    spec = ArtifactSpec(repo_root=repo_root, selector=plan.selector)
+    spec = ArtifactSpec(repo_root=repo_root, selector=plan.selector, app_version=app_version)
     bitcode_sha256 = emit_bitcode(toolchain, spec, paths)
     external_control = build_external_o2_control(toolchain, paths)
     minimum_macos = read_macos_minos(
@@ -664,6 +666,8 @@ def build_profile_linked_benchmarks(
     toolchain: Toolchain,
     repo_root: pathlib.Path,
     production_paths: PipelinePaths,
+    *,
+    app_version: str | None = None,
 ) -> dict[str, ProfileLinkedBenchmark]:
     supplement_dir = production_paths.profiles / "supplements"
     supplement_dir.mkdir()
@@ -674,6 +678,7 @@ def build_profile_linked_benchmarks(
             repo_root,
             production_paths.root / "heavy" / plan.selector,
             plan,
+            app_version=app_version,
         )
         if pair.merged_profile is None or pair.profile_use_ir is None:
             raise PgsoError(

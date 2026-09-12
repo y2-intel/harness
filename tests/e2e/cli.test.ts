@@ -50,11 +50,35 @@ function maxLineWidth(text: string): number {
   return Math.max(...text.split(/\r?\n/).map((line) => Bun.stringWidth(line)));
 }
 
-function sourceVersion(): string {
-  const source = readFileSync(join(REPO_ROOT, "src/main.zig"), "utf8");
-  const match = source.match(/pub const version = "([^"]+)";/);
-  if (!match) throw new Error("src/main.zig version declaration not found");
-  return match[1];
+function expectedVersion(): string {
+  const explicit = process.env.Y2_E2E_APP_VERSION;
+  const strict = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+  const isStrictVersion = (version: string): boolean =>
+    version.length <= 32 && strict.test(version) &&
+    version.split(".").every((part) => BigInt(part) <= 0xffffffffn);
+  if (explicit !== undefined && explicit !== "") {
+    if (!isStrictVersion(explicit)) throw new Error("Y2_E2E_APP_VERSION must be strict X.Y.Z with u32 components");
+    return explicit;
+  }
+  const history = spawnSync("git", [
+    "log", "--first-parent", "--decorate=full", "--decorate-refs=refs/tags/*", "--format=%D", "HEAD",
+  ], { cwd: REPO_ROOT, encoding: "utf8" });
+  if (history.status !== 0) return "0.0.0";
+  for (const commit of history.stdout.split("\n")) {
+    const versions = commit.split(",")
+      .map((ref) => ref.trim())
+      .filter((ref) => ref.startsWith("tag: refs/tags/v"))
+      .map((ref) => ref.slice("tag: refs/tags/v".length))
+      .filter(isStrictVersion);
+    if (versions.length > 0) {
+      return versions.sort((a, b) => {
+        const left = a.split(".").map(Number);
+        const right = b.split(".").map(Number);
+        return right[0] - left[0] || right[1] - left[1] || right[2] - left[2];
+      })[0];
+    }
+  }
+  return "0.0.0";
 }
 
 function doctorSessionDiagnosticsLimit(): number {
@@ -127,7 +151,7 @@ describe("cli: help", () => {
       expect(r.stdout).not.toContain("\x1b[");
       expect(r.stdout).not.toContain("\x1b]2;");
       expect(r.stdout).toStartWith(
-        `Y2 INFORMATION DOMINANCE v${sourceVersion()}\nNative agentic intelligence harness for the terminal.\n`,
+        `Y2 INFORMATION DOMINANCE v${expectedVersion()}\nNative agentic intelligence harness for the terminal.\n`,
       );
       expect(r.stdout).toContain("Commands:\n");
       expect(r.stdout).toContain("Run one noninteractive request");
@@ -321,11 +345,11 @@ With --prompt-permissions, JSON and quiet requests may prompt on stderr only whe
 describe("cli: version", () => {
   for (const alias of ["--version", "-v"]) {
     test(
-      `y2 ${alias} prints the source version`,
+      `y2 ${alias} prints the application build version`,
       async () => {
         const r = await runY2([alias]);
         expect(r.code).toBe(0);
-        expect(r.stdout).toBe(`${sourceVersion()}\n`);
+        expect(r.stdout).toBe(`${expectedVersion()}\n`);
         expect(r.stderr).toBe("");
       },
       TIMEOUT,

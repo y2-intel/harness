@@ -431,6 +431,7 @@ class PgsoCorpusTests(unittest.TestCase):
 
         def command_runner(argv, **kwargs):
             calls.append(argv[1])
+            self.assertEqual("0.0.8", kwargs["env"]["Y2_E2E_APP_VERSION"])
             return CommandResult(
                 argv=tuple(argv),
                 returncode=0,
@@ -443,6 +444,7 @@ class PgsoCorpusTests(unittest.TestCase):
             corpus,
             binary,
             self.root / "behavior-output",
+            app_version="0.0.8",
             command_runner=command_runner,
         )
 
@@ -558,6 +560,7 @@ class PgsoCorpusTests(unittest.TestCase):
             profile_dir,
             merged_profile,
             toolchain=object(),
+            app_version="0.0.8",
             command_runner=command_runner,
             profile_merger=profile_merger,
         )
@@ -589,6 +592,7 @@ class PgsoCorpusTests(unittest.TestCase):
         self.assertFalse((self.root / "zig-out" / "bin" / "y2").exists())
         self.assertTrue(merged.is_file())
         self.assertEqual(2, len(calls))
+        self.assertEqual("0.0.8", calls[0]["env"]["Y2_E2E_APP_VERSION"])
         self.assertNotIn("PGSO_INHERITED", calls[0]["env"])
         self.assertNotIn("PGSO_UNSET_ME", calls[0]["env"])
         self.assertNotIn("TMUX", calls[0]["env"])

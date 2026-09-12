@@ -24,6 +24,7 @@ from scripts.pgso.corpus import (
 from scripts.pgso.model import (
     BuildIdentity,
     PgsoError,
+    require_app_version,
     sha256_file,
     verify_identity,
 )
@@ -179,6 +180,7 @@ def identity_from_mapping(value: object) -> BuildIdentity:
         "bitcode_sha256",
         "corpus_sha256",
         "update_channel",
+        "app_version",
     )
     values: dict[str, str] = {}
     for field in fields:
@@ -193,6 +195,7 @@ def identity_from_mapping(value: object) -> BuildIdentity:
 
 
 def validate_seed_identity(identity: BuildIdentity) -> None:
+    require_app_version(identity.app_version)
     if identity.target != SUPPORTED_TARGET or identity.host_arch != "arm64":
         raise PgsoError("seed identity is not native macOS arm64")
     if identity.update_channel != "stable":
@@ -796,6 +799,7 @@ def run_training_shard(arguments: argparse.Namespace) -> pathlib.Path:
             output / "profile.profdata",
             toolchain=toolchain,
             bun=bun,
+            app_version=identity.app_version,
         )
         payload: dict[str, object] = {
             "schema_version": 1,
@@ -873,12 +877,14 @@ def run_candidate(arguments: argparse.Namespace) -> pathlib.Path:
         toolchain,
         REPO_ROOT,
         paths,
+        app_version=identity.app_version,
     )
 
     spec = ArtifactSpec(
         repo_root=REPO_ROOT,
         target=identity.target,
         update_channel=identity.update_channel,
+        app_version=identity.app_version,
     )
     emit_bitcode(toolchain, spec, paths, expected_sha256=identity.bitcode_sha256)
     apply_profile(toolchain, paths, identity.bitcode_sha256)
@@ -892,7 +898,11 @@ def run_candidate(arguments: argparse.Namespace) -> pathlib.Path:
     minimum_macos = control.get("minimum_macos")
     if not isinstance(minimum_macos, str):
         raise PgsoError("seed control minimum macOS is invalid")
-    candidate = verify_candidate(toolchain, paths, expected_minos=minimum_macos)
+    candidate = verify_candidate(
+        toolchain, paths,
+        expected_minos=minimum_macos,
+        expected_app_version=identity.app_version,
+    )
     if not candidate.artifact.preferred_headroom_met:
         raise PgsoError(
             "candidate meets the hard size ceiling but lacks 0.250 MiB preferred adoption headroom"
@@ -974,6 +984,7 @@ def run_behavior_shard(arguments: argparse.Namespace) -> pathlib.Path:
             candidate_paths.candidate_binary,
             output / "behavior",
             bun=bun,
+            app_version=identity.app_version,
         )
         payload: dict[str, object] = {
             "schema_version": 1,

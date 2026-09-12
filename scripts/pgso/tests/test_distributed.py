@@ -23,6 +23,7 @@ from scripts.pgso.distributed import (
     run_plan,
     select_corpus,
     validate_seed_identity,
+    identity_from_mapping,
 )
 from scripts.pgso.model import BuildIdentity, PgsoError
 from scripts.pgso.pipeline import GENERATION_FLAGS
@@ -331,8 +332,18 @@ class ShardAggregationTests(unittest.TestCase):
             bitcode_sha256="b" * 64,
             corpus_sha256="c" * 64,
             update_channel="stable",
+            app_version="0.0.8",
             generation_flags=GENERATION_FLAGS,
         )
+
+    def test_seed_identity_requires_a_strict_application_version(self) -> None:
+        values = dataclasses.asdict(self.identity)
+        self.assertEqual(self.identity, identity_from_mapping(values))
+        del values["app_version"]
+        with self.assertRaisesRegex(PgsoError, "app_version"):
+            identity_from_mapping(values)
+        with self.assertRaisesRegex(PgsoError, "app version"):
+            validate_seed_identity(dataclasses.replace(self.identity, app_version="0.0.8-dev"))
 
     def shard(self, shard_id: str, names: tuple[str, ...]) -> dict[str, object]:
         return {

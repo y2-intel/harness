@@ -14,13 +14,15 @@ The driver fails unless all of these match exactly:
 - LLVM `21.1.8` tools and profile runtime from one configured LLVM root
 - Bun `1.3.14`
 - Hyperfine `1.20.0`
-- the selected source commit, update channel, bitcode hash, corpus hash, and profile-generation flags
+- the selected source commit, application version, update channel, bitcode hash, corpus hash, and profile-generation flags
 
 The pipeline does not use the host CPU as the release target. The final candidate must match the control's architecture and minimum macOS version, contain a valid code signature, contain no profile sections or profile-runtime dependency, and produce no profile output when executed.
 
 ## Commands
 
 Every mutating command requires a fresh or empty output directory. State from separate runs is never merged implicitly.
+
+Use `--app-version X.Y.Z` to qualify a CI-computed release version without modifying source files. The control, instrumented program, rebuilt candidate, and runtime checks share that exact version, recorded in the build identity. Without an override, the control resolves the nearest strict `vX.Y.Z` tag on the checkout's first-parent history and pins that result for later stages. If Git metadata or a reachable release tag is absent, the version is `0.0.0`. Tags inherited only through an upstream merge do not select the version. Packaging requires the qualified identity and binary version to match the requested release version.
 
 ```bash
 python3 -m scripts.pgso build \

@@ -3,6 +3,11 @@ name: macOS arm64 PGSO candidate
 on:
   workflow_call:
     inputs:
+      app_version:
+        description: Strict application version to qualify and package
+        required: false
+        type: string
+        default: ""
       package_release:
         description: Package the eligible candidate as the stable macOS arm64 artifact
         required: false
@@ -63,8 +68,15 @@ jobs:
         run: python3 -m unittest discover -s scripts/pgso/tests -v
 
       - name: Build immutable seed artifacts
+        env:
+          Y2_PGSO_APP_VERSION: ${{ inputs.app_version }}
         run: |
+          version_args=()
+          if [ -n "$Y2_PGSO_APP_VERSION" ]; then
+            version_args=(--app-version "$Y2_PGSO_APP_VERSION")
+          fi
           python3 -m scripts.pgso build \
+            "${version_args[@]}" \
             --llvm-bin "${{ steps.setup.outputs.llvm-bin }}" \
             --output-dir "$RUNNER_TEMP/y2-pgso-seed" \
             --target aarch64-macos \
@@ -509,7 +521,22 @@ jobs:
         run: chmod +x "$RUNNER_TEMP/y2-pgso-aggregate/candidate/y2"
 
       - name: Confirm release eligibility
-        run: python3 -m scripts.pgso report --output-dir "$RUNNER_TEMP/y2-pgso-aggregate" >/dev/null
+        env:
+          Y2_PGSO_APP_VERSION: ${{ inputs.app_version }}
+        run: |
+          python3 -m scripts.pgso report --output-dir "$RUNNER_TEMP/y2-pgso-aggregate" >/dev/null
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          from scripts.pgso.model import require_app_version
+          requested = require_app_version(os.environ["Y2_PGSO_APP_VERSION"])
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "y2-pgso-aggregate"
+          evidence = json.loads((root / "manifest.json").read_text())["evidence"]
+          if evidence["identity"]["app_version"] != requested:
+              raise SystemExit("qualified app version does not match release request")
+          result = subprocess.run([str(root / "candidate/y2"), "--version"], capture_output=True, text=True, check=True, timeout=60)
+          if result.stderr or result.stdout.strip() != requested:
+              raise SystemExit("packaged binary version does not match release request")
+          PY
 
       - name: Package stable release candidate
         run: |

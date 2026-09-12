@@ -20,17 +20,19 @@ permissions:
 
 concurrency:
   group: publish-liby2-${{ (github.event.workflow_run.name == 'Release' || inputs.channel == 'stable') && 'stable' || 'dev' }}
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   metadata:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.event == 'push' ||
+        (github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'workflow_dispatch')) &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
+      app_version: ${{ steps.metadata.outputs.app_version }}
       channel: ${{ steps.metadata.outputs.channel }}
       npm_tag: ${{ steps.metadata.outputs.npm_tag }}
       sha: ${{ steps.metadata.outputs.sha }}
@@ -45,6 +47,7 @@ jobs:
       - name: Resolve channel and version
         id: metadata
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REQUESTED_CHANNEL: ${{ inputs.channel }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -64,32 +67,11 @@ jobs:
             fi
           fi
 
-          BASE_VERSION=$(grep 'pub const version' src/main.zig | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if ! [[ "$BASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::src/main.zig version is not strict SemVer"
-            exit 1
-          fi
+          python3 scripts/release.py metadata --source-sha "$SHA" --channel "$CHANNEL" \
+            --output "$RUNNER_TEMP/liby2-release.json"
+          BASE_VERSION=$(jq -r .version "$RUNNER_TEMP/liby2-release.json")
           SHOULD_PUBLISH=true
           if [ "$CHANNEL" = "stable" ]; then
-            TAG="v${BASE_VERSION}"
-            if git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
-              TAG_SHA=$(git rev-list -n 1 "$TAG")
-              if [ "$TAG_SHA" != "$SHA" ]; then
-                if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-                  echo "::error::Stable tag ${TAG} points to ${TAG_SHA}, not ${SHA}"
-                  exit 1
-                fi
-                echo "Release workflow did not publish ${SHA}; skipping liby2 stable publish"
-                SHOULD_PUBLISH=false
-              fi
-            else
-              if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-                echo "::error::Stable tag ${TAG} does not exist"
-                exit 1
-              fi
-              echo "Release workflow did not create ${TAG}; skipping liby2 stable publish"
-              SHOULD_PUBLISH=false
-            fi
             VERSION="$BASE_VERSION"
             NPM_TAG=latest
           else
@@ -98,6 +80,7 @@ jobs:
             NPM_TAG=dev
           fi
 
+          echo "app_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
           echo "npm_tag=${NPM_TAG}" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
@@ -138,7 +121,7 @@ jobs:
           node-version: "24"
 
       - name: Build ReleaseSafe addon
-        run: zig build -Dnapi-surface=core -Doptimize=ReleaseSafe -Dupdate-channel=${{ needs.metadata.outputs.channel }}
+        run: zig build -Dnapi-surface=core -Doptimize=ReleaseSafe -Dupdate-channel=${{ needs.metadata.outputs.channel }} -Dapp-version=${{ needs.metadata.outputs.app_version }}
 
       - name: Test native addon
         run: npm run --prefix sdk test:node-napi
@@ -178,8 +161,8 @@ jobs:
 
       - name: Build ReleaseSmall WebAssembly surfaces
         run: |
-          zig build -Dwasm-surface=core -Doptimize=ReleaseSmall -Dupdate-channel=${{ needs.metadata.outputs.channel }}
-          zig build -Dwasm-surface=term -Doptimize=ReleaseSmall -Dupdate-channel=${{ needs.metadata.outputs.channel }}
+          zig build -Dwasm-surface=core -Doptimize=ReleaseSmall -Dupdate-channel=${{ needs.metadata.outputs.channel }} -Dapp-version=${{ needs.metadata.outputs.app_version }}
+          zig build -Dwasm-surface=term -Doptimize=ReleaseSmall -Dupdate-channel=${{ needs.metadata.outputs.channel }} -Dapp-version=${{ needs.metadata.outputs.app_version }}
 
       - name: Install terminal test dependencies
         run: npm ci --prefix sdk/node
@@ -301,10 +284,18 @@ jobs:
 
       - name: Publish with npm trusted publishing
         env:
+          GH_TOKEN: ${{ github.token }}
           LIBY2_VERSION: ${{ needs.metadata.outputs.version }}
           NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
         run: |
           set -euo pipefail
+          if [ "$NPM_TAG" = latest ]; then
+            LATEST_RELEASE=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+            if [ "$LATEST_RELEASE" != "v${LIBY2_VERSION}" ]; then
+              echo "::error::A newer stable release exists; refusing to move npm latest from a stale release"
+              exit 1
+            fi
+          fi
           if npm view "liby2@${LIBY2_VERSION}" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
             echo "liby2@${LIBY2_VERSION} is already published; leaving ${NPM_TAG} unchanged"
             exit 0
