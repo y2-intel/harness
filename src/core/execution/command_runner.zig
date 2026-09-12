@@ -2315,6 +2315,7 @@ fn collectOutput(
             termination_protocol,
             cfg,
             started_ms,
+            io_mod.milliTimestamp(),
             source,
             &signal_started_ms,
             &force_kill_sent,
@@ -2524,11 +2525,11 @@ fn updateTerminationSignal(
     termination_protocol: TerminationProtocol,
     cfg: Config,
     started_ms: i64,
+    now_ms: i64,
     source: *TerminationSource,
     signal_started_ms: *?i64,
     force_kill_sent: *bool,
 ) !void {
-    const now_ms = io_mod.milliTimestamp();
     if (signal_started_ms.* == null) {
         const control = ExecutionControl{
             .cancel_flag = cfg.cancel_flag,
@@ -4487,69 +4488,96 @@ test "cancel and timeout tie chooses cancellation" {
 }
 
 test "runtime cancellation observed at the timeout deadline stays graceful" {
-    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
+    if (comptime !supports_foreground_session) return;
 
-    for (0..10) |_| {
-        const alloc = std.testing.allocator;
-        var tmp = std.testing.tmpDir(.{});
-        defer tmp.cleanup();
-        const workspace = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
-        defer alloc.free(workspace);
-        const term_path = try std.fs.path.join(alloc, &.{ workspace, "tie.term" });
-        defer alloc.free(term_path);
-        const quoted_term = try shellQuote(alloc, term_path);
-        defer alloc.free(quoted_term);
-        const command = try std.fmt.allocPrint(
-            alloc,
-            "trap 'printf TERM > {s}; sleep 3; exit 130' TERM; printf 'TIE-READY\n'; while :; do sleep 1; done",
-            .{quoted_term},
-        );
-        defer alloc.free(command);
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try io_mod.dirRealpathAlloc(alloc, tmp.dir, ".");
+    defer alloc.free(workspace);
+    const term_path = try std.fs.path.join(alloc, &.{ workspace, "tie.term" });
+    defer alloc.free(term_path);
+    const quoted_term = try shellQuote(alloc, term_path);
+    defer alloc.free(quoted_term);
+    const command = try std.fmt.allocPrint(
+        alloc,
+        "trap 'printf TERM > {s}; sleep 3; exit 130' TERM; printf 'TIE-READY\\n'; while :; do :; done",
+        .{quoted_term},
+    );
+    defer alloc.free(command);
 
-        const timeout_ms: usize = 2000;
-        const started_ms = io_mod.milliTimestamp();
-        var cancel = std.atomic.Value(bool).init(false);
-        const CancelNearDeadline = struct {
-            fn run(flag: *std.atomic.Value(bool), request_at_ms: i64) void {
-                while (io_mod.milliTimestamp() < request_at_ms) {
-                    io_mod.sleep(std.time.ns_per_ms);
-                }
-                flag.store(true, .seq_cst);
-            }
-        };
-        const request_at_ms = started_ms + @as(i64, @intCast(timeout_ms)) - 25;
-        const thread = try std.Thread.spawn(
-            .{},
-            CancelNearDeadline.run,
-            .{ &cancel, request_at_ms },
-        );
-        defer thread.join();
-        var result: ?CommandExecutionResult = null;
-        var cancelled = false;
-        if (executeCommand(.{
-            .max_command_output_bytes = 4096,
-            .cancel_flag = &cancel,
-            .timeout_ms = timeout_ms,
-            .timeout_started_ms = started_ms,
-        }, alloc, command, workspace)) |value| {
-            result = value;
-            cancelled = value.cancelled;
-        } else |err| switch (err) {
-            error.Cancelled => cancelled = true,
-            else => {
-                try std.testing.expectEqual(error.Cancelled, err);
-                cancelled = true;
-            },
-        }
-        defer if (result) |value| alloc.free(value.output);
+    var child = try spawnForegroundSessionBootstrapForTest(workspace, command);
+    var phase: ForegroundSessionPhase = .pre_ready;
+    var child_needs_cleanup = true;
+    defer if (child_needs_cleanup) cleanupForegroundSessionChild(&child, phase);
+    try expectForegroundSessionReadyForTest(&child);
+    phase = .group_ready;
+    const release_write = child.stdin orelse return error.TestUnexpectedResult;
+    try release_write.writeStreamingAll(io_mod.getIo(), foreground_session_test_nonce);
+    try release_write.writeStreamingAll(io_mod.getIo(), &.{foreground_session_release_byte});
+    release_write.close(io_mod.getIo());
+    child.stdin = null;
 
-        try std.testing.expect(cancelled);
-        try std.testing.expect(io_mod.milliTimestamp() - started_ms >= @as(i64, @intCast(timeout_ms)));
-        try std.testing.expect(absoluteFileExists(term_path));
-        const term_text = try readAbsoluteFile(alloc, term_path, 64);
-        defer alloc.free(term_text);
-        try std.testing.expectEqualStrings("TERM", term_text);
+    var ready: ["TIE-READY\n".len]u8 = undefined;
+    var ready_len: usize = 0;
+    while (ready_len < ready.len) {
+        const read_len = try std.posix.read(child.stdout.?.handle, ready[ready_len..]);
+        try std.testing.expect(read_len > 0);
+        ready_len += read_len;
     }
+    try std.testing.expectEqualStrings("TIE-READY\n", &ready);
+
+    const process_group_id = child.id;
+    var observer = try ProcessObserver.init(&child);
+    defer observer.deinit();
+    try observer.start();
+    child_needs_cleanup = false;
+    defer observer.abort(process_group_id);
+
+    // Observe both conditions at the same instant after the shell installs its
+    // trap. A real-time cancellation thread cannot guarantee a deadline tie.
+    const started_ms: i64 = 1000;
+    const deadline_ms: i64 = 3000;
+    var cancel = std.atomic.Value(bool).init(true);
+    const cfg = Config{
+        .max_command_output_bytes = 4096,
+        .cancel_flag = &cancel,
+        .timeout_ms = @intCast(deadline_ms - started_ms),
+    };
+    var source: TerminationSource = .natural;
+    var signal_started_ms: ?i64 = null;
+    var force_kill_sent = false;
+    const graceful_started_ms = io_mod.milliTimestamp();
+    for ([_]i64{ deadline_ms, deadline_ms + foreground_supervisor_handoff_ms }) |now_ms| {
+        try updateTerminationSignal(
+            &observer,
+            process_group_id,
+            .foreground_supervisor,
+            cfg,
+            started_ms,
+            now_ms,
+            &source,
+            &signal_started_ms,
+            &force_kill_sent,
+        );
+        try std.testing.expectEqual(TerminationSource.cancelled, source);
+        try std.testing.expectEqual(@as(?i64, deadline_ms), signal_started_ms);
+        try std.testing.expect(!force_kill_sent);
+    }
+    _ = try waitForCollectedProcess(&observer, source, process_group_id, null);
+    try std.testing.expect(io_mod.milliTimestamp() - graceful_started_ms >= 500);
+    try std.testing.expectEqual(
+        TerminationSource.cancelled,
+        reconcileForegroundTerminationSource(source, deadline_ms, deadline_ms + 1000),
+    );
+    if (!absoluteFileExists(term_path)) {
+        const stderr = try io_mod.readFileToEnd(alloc, &observer.stderr, 4096);
+        defer alloc.free(stderr);
+        std.debug.print("missing graceful TERM marker; target stderr: {s}\n", .{stderr});
+    }
+    const term_text = try readAbsoluteFile(alloc, term_path, 64);
+    defer alloc.free(term_text);
+    try std.testing.expectEqualStrings("TERM", term_text);
 }
 
 test "accepted short timeout matrix returns timeout errors" {
