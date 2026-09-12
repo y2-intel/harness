@@ -4293,7 +4293,7 @@ test.skipIf(!tmuxAvailable())("tmux recovery rejects a replaced pane without sig
   await waitForExit(replacement);
 }, 25_000);
 
-test.skipIf(!tmuxAvailable())("tmux repeated force-close cycles leave no Y2 server", async () => {
+test.skipIf(!tmuxAvailable())("tmux repeated force-close cycles leave no y2 server", async () => {
   if (!existsSync("/bin/zsh")) return;
   const home = makeHome();
   const paths = hostPaths(home);

@@ -131,7 +131,7 @@ fn stream(raw: ?*anyopaque, alloc: Allocator, request: stream_provider.ModelRequ
     };
     return .{ .completed = .{
         .completion = completion,
-        .usage = .{ .immediate = null },
+        .usage = openai_chat.usageOutcome(request.model, endpoint, completion),
         .ownership = .owned,
     } };
 }

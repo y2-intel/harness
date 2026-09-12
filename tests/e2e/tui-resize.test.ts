@@ -579,7 +579,7 @@ async function waitForLiveScrollbackText(
     const status = s.paneStatus();
     if (status.dead) {
       throw new Error(
-        `Y2 exited with status ${status.status} while waiting for ${JSON.stringify(needle)}.\nScrollback:\n${last}`,
+        `y2 exited with status ${status.status} while waiting for ${JSON.stringify(needle)}.\nScrollback:\n${last}`,
       );
     }
     last = await s.captureFullScrollback();
@@ -652,10 +652,11 @@ function expectSkillsMenuGrid(
   const text = grid.join("\n");
   expect(text).toContain(`Skills ${count}`);
   expect(text).toContain("[All]");
-  expect(text).toContain("Y2");
+  expect(text).toContain("y2");
+  expect(text).not.toContain("[Y2]");
   expect(text).toContain("Workspace");
   expect(text).toContain("Codex");
-  expect(text).toContain("Y2 · Global");
+  expect(text).toContain("y2 · Global");
   expect(names.some((name) => text.includes(name))).toBe(true);
   expect(text).not.toContain("Visible skills (");
   expect(findInlineSkillsPicker(grid)).not.toBeNull();
@@ -808,6 +809,26 @@ async function waitForTraceCount(
     `Timed out waiting for ${minimumCount} copies of ${JSON.stringify(text)}.\nTrace:\n${
       existsSync(tracePath) ? readFileSync(tracePath, "utf8") : ""
     }`,
+  );
+}
+
+async function waitForTapeOutputCount(
+  tapePath: string,
+  text: string,
+  minimumCount: number,
+  timeoutMs = 30_000,
+): Promise<number> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const output = Buffer.concat(
+      stdoutFrames(tapePath).map((frame) => frame.payload),
+    ).toString();
+    const count = countOccurrences(output, text);
+    if (count >= minimumCount) return count;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(
+    `Timed out waiting for ${minimumCount} copies of ${JSON.stringify(text)} in the tape.`,
   );
 }
 
@@ -1054,14 +1075,18 @@ function findInlineSkillsPicker(
   };
 }
 
-function findHelpScreen(grid: string[]): { topDivider: number; header: number; bottomDivider: number; hint: number } | null {
+function findInlineHelpPicker(
+  grid: string[],
+): { input: number; topDivider: number; header: number; bottomDivider: number; hint: number } | null {
   const header = grid.findIndex((line) => line.includes("Commands "));
-  if (header <= 0 || !isDividerRow(grid[header - 1]!)) return null;
-  if (!isInputRow(grid[0]!)) return null;
+  if (header <= 1 || !isDividerRow(grid[header - 1]!)) return null;
+  const input = header - 2;
+  if (!isInputRow(grid[input]!)) return null;
   const bottomDivider = grid.findLastIndex((line) => isDividerRow(line));
   if (bottomDivider <= header || bottomDivider + 1 >= grid.length) return null;
   if (!grid[bottomDivider + 1]!.includes("Enter Open")) return null;
   return {
+    input,
     topDivider: header - 1,
     header,
     bottomDivider,
@@ -2168,7 +2193,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
         roots.push(await runLargeSkillResizeAttempt(attempt));
       }
       if (KEEP_LARGE_SKILL_ARTIFACTS) {
-        console.log(`Y2 resize artifacts:\n${roots.join("\n")}`);
+        console.log(`y2 resize artifacts:\n${roots.join("\n")}`);
         console.log(
           `Cleanup: rm -rf ${roots.map(quoteShellPath).join(" ")}`,
         );
@@ -2188,7 +2213,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       results.push(await runRapidSkillResizeAttempt(125, 1));
       if (KEEP_LARGE_SKILL_ARTIFACTS) {
         console.log(
-          `Y2 rapid resize artifacts:\n${results.map(({ root }) => root).join("\n")}`,
+          `y2 rapid resize artifacts:\n${results.map(({ root }) => root).join("\n")}`,
         );
       }
     },
@@ -2264,7 +2289,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       });
       await session.waitForComposer(10_000);
       await session.sendText("stream across a resize");
-      await session.waitForText("Thinking", 30_000);
+      await session.waitForText("Generating", 30_000);
       const activeStage = await session.captureFullScrollback();
       expect(activeStage).not.toContain(markers[0]);
       expect(activeStage).not.toContain(markers[1]);
@@ -2330,7 +2355,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
         )}\n`,
       );
       if (KEEP_LARGE_SKILL_ARTIFACTS) {
-        console.log(`Y2 gated stream resize artifact:\n${root}`);
+        console.log(`y2 gated stream resize artifact:\n${root}`);
       }
     },
     60_000,
@@ -2409,7 +2434,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       await session.waitForText("/help", 10_000);
       await waitForSelectedSlashLabel(session, "/help");
       const shrinkStage = await session.captureFullScrollback();
-      expect(shrinkStage).toContain("Commands 36 · Type to filter");
+      expect(shrinkStage).toContain("Commands 35 · Type to filter");
       expect(shrinkStage).toContain("1–4");
       writeFileSync(join(root, "scrollback-after-shrink.txt"), shrinkStage);
 
@@ -2478,7 +2503,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
         )}\n`,
       );
       if (KEEP_LARGE_SKILL_ARTIFACTS) {
-        console.log(`Y2 open picker resize artifact:\n${root}`);
+        console.log(`y2 open picker resize artifact:\n${root}`);
       }
     },
     60_000,
@@ -2522,10 +2547,10 @@ describe.skipIf(SKIP)("tui: resize", () => {
       const baselineFooter = findFooter(baseline)!;
 
       await session.sendLiteral("/mod");
-      await session.waitForText("/models", 10_000);
+      await session.waitForText("/model", 10_000);
       await session.sendKeys("Escape");
       await session.waitForPane(
-        (pane) => !pane.includes("/models"),
+        (pane) => !pane.includes("/model"),
         10_000,
       );
       await Bun.sleep(250);
@@ -2587,12 +2612,12 @@ describe.skipIf(SKIP)("tui: resize", () => {
       label: "help",
       width: 72,
       height: 16,
-      surfaceMarker: "Commands ",
+      surfaceMarker: "Enter Open",
       editedInput: "x",
       async openSurface(active) {
         await active.resizeWindow(60, 12, 500);
         await active.sendText("/help");
-        await active.waitForText("Commands ", TIMEOUT);
+        await active.waitForText("Enter Open", TIMEOUT);
       },
     },
     {
@@ -2600,11 +2625,11 @@ describe.skipIf(SKIP)("tui: resize", () => {
       label: "cost",
       width: 120,
       height: 36,
-      surfaceMarker: "Usage · 30 days",
+      surfaceMarker: "[30 days]",
       editedInput: "x",
       async openSurface(active) {
         await active.sendText("/cost");
-        await active.waitForText("Usage · 30 days", TIMEOUT);
+        await active.waitForText("[30 days]", TIMEOUT);
         await active.resizeWindow(60, 12, 500);
       },
     },
@@ -2613,11 +2638,11 @@ describe.skipIf(SKIP)("tui: resize", () => {
       label: "model",
       width: 120,
       height: 36,
-      surfaceMarker: "         y2-agent",
-      editedInput: "/model x",
+      surfaceMarker: "Models",
+      editedInput: "x",
       async openSurface(active) {
         await active.sendText("/model");
-        await active.waitForText("         y2-agent", TIMEOUT);
+        await active.waitForText("Models", TIMEOUT);
         await active.resizeWindow(60, 12, 500);
       },
     },
@@ -2626,11 +2651,11 @@ describe.skipIf(SKIP)("tui: resize", () => {
       label: "workspace",
       width: 120,
       height: 36,
-      surfaceMarker: "Workspace:",
+      surfaceMarker: "Workspace",
       editedInput: "x",
       async openSurface(active) {
         await active.sendText("/workspace");
-        await active.waitForText("Workspace:", TIMEOUT);
+        await active.waitForText("Workspace", TIMEOUT);
         await active.resizeWindow(60, 12, 500);
       },
     },
@@ -2701,7 +2726,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       );
       session = fixture.active;
       await session.sendText("/workspace");
-      await session.waitForText("Workspace:", TIMEOUT);
+      await session.waitForText("Workspace", TIMEOUT);
       await session.sendKeys("Enter");
       await session.waitForPane(
         (pane) =>
@@ -2834,7 +2859,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       expect(existsSync(tapePath)).toBe(true);
       expect(readFileSync(tapePath).byteLength).toBeGreaterThan(0);
       if (KEEP_LARGE_SKILL_ARTIFACTS) {
-        console.log(`Y2 wide-user resize artifact:\n${root}`);
+        console.log(`y2 wide-user resize artifact:\n${root}`);
       }
     },
     TIMEOUT,
@@ -3283,7 +3308,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       session = launched.active;
       await session.sendText("Reply with exactly resize_activity_done.");
       await waitForGatewayRequestCount(gateway, 1);
-      await session.waitForText("Thinking", TIMEOUT);
+      await session.waitForText("Generating", TIMEOUT);
       await session.resizeWindow(90, 30, 500);
 
       const grid = await waitForSettledFooter(session);
@@ -3370,12 +3395,12 @@ describe.skipIf(SKIP)("tui: resize", () => {
     async () => {
       session = await launchAt(120, 40);
       await session.sendText("/help");
-      await session.waitForText("Commands 36", 5_000);
+      await session.waitForText("Commands 35", 5_000);
       await session.resizeWindow(76, 24, 400);
 
       const grid = await session.capturePaneGrid();
-      expect(grid.join("\n")).toContain("Commands 36");
-      expect(findHelpScreen(grid)).not.toBeNull();
+      expect(grid.join("\n")).toContain("Commands 35");
+      expect(findInlineHelpPicker(grid)).not.toBeNull();
 
       await session.sendKeys("Escape");
       await session.waitForPane((pane) => !pane.includes("Enter Open"), 5_000);
@@ -3392,7 +3417,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
     async () => {
       session = await launchAt(120, 40);
       await session.sendText("/help");
-      await session.waitForText("Commands 36", 5_000);
+      await session.waitForText("Commands 35", 5_000);
 
       const captureScrollback = () =>
         execSync(`tmux capture-pane -t ${session!.name} -p -S -`, {
@@ -3400,9 +3425,8 @@ describe.skipIf(SKIP)("tui: resize", () => {
           stdio: "pipe",
         });
       const expectHelpCatalog = (grid: string[]) => {
-        expect(grid.join("\n")).toContain("Commands 36");
-        expect(grid.join("\n")).not.toContain("Run /help for commands");
-        expect(findHelpScreen(grid)).not.toBeNull();
+        expect(grid.join("\n")).toContain("Commands 35");
+        expect(findInlineHelpPicker(grid)).not.toBeNull();
       };
 
       await session.resizeWindow(72, 20, 500);
@@ -3412,11 +3436,14 @@ describe.skipIf(SKIP)("tui: resize", () => {
       expectHelpCatalog(await session.capturePaneGrid());
 
       await session.sendKeys("Escape");
-      await session.waitForText("Run /help for commands", 5_000);
+      await session.waitForPane(
+        (pane) => hasEmptyComposer(pane) && !pane.includes("Enter Open"),
+        5_000,
+      );
       const restored = captureScrollback();
       expect(restored.match(/Y2 INFORMATION DOMINANCE · v\d+\.\d+\.\d+\b/g)).toHaveLength(1);
       expect(restored.match(/Run \/help for commands/g)).toHaveLength(1);
-      expect(restored).not.toContain("Commands 36");
+      expect(restored).not.toContain("Commands 35");
       expect(findFooter(await session.capturePaneGrid())).not.toBeNull();
     },
     TIMEOUT,
@@ -3925,22 +3952,24 @@ describe.skipIf(SKIP)("tui: resize", () => {
         expect(await session.captureFullScrollback()).toContain(marker);
 
         await session.sendText("/help");
-        await session.waitForText("Commands 36", 5_000);
+        await session.waitForText("Commands 35", 5_000);
         await session.resizeWindow(84, 28, 500);
 
         const catalog = await session.capturePaneGrid();
         expect(catalog.join("\n")).not.toContain(marker);
-        expect(catalog.join("\n")).not.toContain("Run /help for commands");
-        expect(findHelpScreen(catalog)).not.toBeNull();
+        expect(findInlineHelpPicker(catalog)).not.toBeNull();
 
         await session.sendKeys("Escape");
-        await session.waitForText("Run /help for commands", 5_000);
+        await session.waitForPane(
+          (pane) => hasEmptyComposer(pane) && !pane.includes("Enter Open"),
+          5_000,
+        );
         const scrollback = await session.captureFullScrollback();
         expect(scrollback).not.toContain(marker);
         expect(scrollback.match(/Y2 INFORMATION DOMINANCE · v\d+\.\d+\.\d+\b/g)).toHaveLength(1);
         expect(scrollback.match(/Run \/help for commands/g)).toHaveLength(1);
         expect(scrollback.split("\n")[0]).toContain("██╗   ██╗██████╗");
-        expect(scrollback).not.toContain("Commands 36");
+        expect(scrollback).not.toContain("Commands 35");
         const finalGrid = await session.capturePaneGrid();
         expect(findFooter(finalGrid), finalGrid.join("\n")).not.toBeNull();
 
@@ -4001,7 +4030,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       const initialInputRows = (await session.capturePaneGrid()).filter(isInputRow);
       expect(initialInputRows).toEqual(["┃"]);
       await session.sendText("Record a theme reset transcript marker.");
-      await session.waitForText("THEME_RESET_FIRST_RESPONSE", TIMEOUT);
+      await session.waitForText(inlineTailMarker, TIMEOUT);
 
       const resetCountBefore = countOccurrences(
         Buffer.concat(stdoutFrames(tapePath).map((frame) => frame.payload)).toString(),
@@ -4057,6 +4086,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
         ...responseFence,
       ]);
       await waitForTraceText(tracePath, "theme_update_settled light=true rgb=terminal");
+      await waitForTapeOutputCount(tapePath, "\x1b[3J", resetCountBefore + 1);
 
       const replayed = await session.waitForText(inlineTailMarker, TIMEOUT);
       expect(replayed).not.toContain("?997");
@@ -4106,10 +4136,7 @@ describe.skipIf(SKIP)("tui: resize", () => {
       ]);
       await waitForTraceText(tracePath, "theme_update_settled light=false rgb=terminal");
       expect(
-        countOccurrences(
-          Buffer.concat(stdoutFrames(tapePath).map((frame) => frame.payload)).toString(),
-          "\x1b[3J",
-        ),
+        await waitForTapeOutputCount(tapePath, "\x1b[3J", resetCountBefore + 2),
       ).toBe(resetCountBefore + 2);
 
       await session.sendText("Confirm input survives the theme reset.");

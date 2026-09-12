@@ -113,9 +113,19 @@ pub const InvocationObservation = struct {
         usage_outcome: stream_provider.UsageOutcome,
     ) !void {
         const ledger = self.usage orelse return;
-        const reference = switch (usage_outcome) {
-            .immediate => |maybe_reference| maybe_reference,
-            .deferred => |value| value,
+        switch (usage_outcome) {
+            .reported_tokens => |reported| {
+                _ = try ledger.finishReportedInvocationDurably(
+                    alloc,
+                    self.sequence,
+                    self.elapsedMs(),
+                    completion,
+                    reported.model,
+                    reported.scope_digest,
+                    reported.observed_at_ms,
+                );
+                return;
+            },
             .unavailable => |availability| {
                 const delivery: DeliveryOutcome = switch (availability) {
                     .unbilled => .unbilled,
@@ -134,10 +144,8 @@ pub const InvocationObservation = struct {
                 }
                 return;
             },
-        } orelse {
-            try ledger.finishInvocationDurably(self.sequence, self.elapsedMs(), .unbilled);
-            return;
-        };
+            .exact, .deferred => {},
+        }
         const delivery: DeliveryOutcome = if (completion.delivery_ambiguous)
             .ambiguous_delivery
         else if (!completion.generation_metadata_invalid)
@@ -153,36 +161,73 @@ pub const InvocationObservation = struct {
             );
             return;
         }
-        const accepted = try ledger.finishDeferredInvocationDurably(
-            alloc,
-            self.sequence,
-            self.elapsedMs(),
-            delivery,
-            reference,
-        );
-        if (!accepted) return;
-        debug_trace.logf(
-            "session",
-            "usage generation queued sequence={d} id={s}",
-            .{ self.sequence, reference.generation_id },
-        );
-        if (completion.billing) |billing| {
-            ledger.applyProviderBilling(alloc, reference.generation_id, billing) catch |err| {
+        switch (usage_outcome) {
+            .exact => |provider| {
+                const generation_id = completion.generation_id orelse {
+                    try ledger.finishInvocationDurably(
+                        self.sequence,
+                        self.elapsedMs(),
+                        if (completion.delivery_ambiguous)
+                            .ambiguous_delivery
+                        else
+                            .possibly_billed_without_identity,
+                    );
+                    debug_trace.logf(
+                        "session",
+                        "usage billing incomplete sequence={d} reason=generation_identity_missing",
+                        .{self.sequence},
+                    );
+                    return;
+                };
+                const billing = completion.billing orelse {
+                    try ledger.finishInvocationDurably(
+                        self.sequence,
+                        self.elapsedMs(),
+                        if (completion.delivery_ambiguous)
+                            .ambiguous_delivery
+                        else
+                            .possibly_billed_without_identity,
+                    );
+                    debug_trace.logf(
+                        "session",
+                        "usage billing incomplete sequence={d} reason=exact_usage_missing",
+                        .{self.sequence},
+                    );
+                    return;
+                };
+                const accepted = try ledger.finishExactInvocationDurably(
+                    alloc,
+                    self.sequence,
+                    self.elapsedMs(),
+                    delivery,
+                    provider,
+                    generation_id,
+                    billing,
+                );
+                if (!accepted) return;
                 debug_trace.logf(
                     "session",
-                    "usage stream billing apply failed id={s} reason={s}",
-                    .{ reference.generation_id, @errorName(err) },
+                    "usage exact generation settled sequence={d} id={s}",
+                    .{ self.sequence, generation_id },
+                );
+            },
+            .deferred => |reference| {
+                const accepted = try ledger.finishDeferredInvocationDurably(
+                    alloc,
+                    self.sequence,
+                    self.elapsedMs(),
+                    delivery,
+                    reference,
+                );
+                if (!accepted) return;
+                debug_trace.logf(
+                    "session",
+                    "usage generation queued sequence={d} id={s}",
+                    .{ self.sequence, reference.generation_id },
                 );
                 ledger.flushProfilePublications();
-                return;
-            };
-            debug_trace.logf(
-                "session",
-                "usage stream billing settled sequence={d} id={s}",
-                .{ self.sequence, reference.generation_id },
-            );
-        } else {
-            ledger.flushProfilePublications();
+            },
+            .reported_tokens, .unavailable => unreachable,
         }
     }
 
@@ -564,6 +609,240 @@ pub const Usage = struct {
         return accepted;
     }
 
+    fn finishExactInvocationDurably(
+        self: *Usage,
+        alloc: Allocator,
+        sequence: u64,
+        duration_ms: u64,
+        outcome: DeliveryOutcome,
+        provider: model_provider.ProviderId,
+        external_id: []const u8,
+        billing: types.ProviderBilling,
+    ) !bool {
+        var canonical_buffer: [30]u8 = undefined;
+        const canonical_id = canonicalExactGenerationId(
+            provider,
+            external_id,
+            &canonical_buffer,
+        ) catch |err| {
+            try self.finishInvocationDurably(
+                sequence,
+                duration_ms,
+                if (outcome == .ambiguous_delivery)
+                    .ambiguous_delivery
+                else
+                    .possibly_billed_without_identity,
+            );
+            debug_trace.logf(
+                "session",
+                "usage exact generation rejected reason={s}",
+                .{@errorName(err)},
+            );
+            return false;
+        };
+        const record = GenerationRecord{
+            .id = canonical_id,
+            .created_at_ms = billing.created_at_ms,
+            .model = billing.model,
+            .total_cost = billing.total_cost,
+            .input_tokens = billing.input_tokens,
+            .output_tokens = billing.output_tokens,
+            .cache_read_tokens = billing.cache_read_tokens,
+            .cache_write_tokens = billing.cache_write_tokens,
+            .reasoning_tokens = billing.reasoning_tokens,
+            .billable_web_search_calls = billing.billable_web_search_calls,
+        };
+        validateGenerationRecord(record) catch |err| {
+            try self.finishInvocationDurably(
+                sequence,
+                duration_ms,
+                if (outcome == .ambiguous_delivery)
+                    .ambiguous_delivery
+                else
+                    .possibly_billed_without_identity,
+            );
+            debug_trace.logf(
+                "session",
+                "usage exact generation rejected reason={s}",
+                .{@errorName(err)},
+            );
+            return false;
+        };
+
+        return self.finishRecordedInvocationDurably(
+            alloc,
+            sequence,
+            duration_ms,
+            outcome,
+            provider,
+            record,
+            true,
+        );
+    }
+
+    fn finishReportedInvocationDurably(
+        self: *Usage,
+        alloc: Allocator,
+        sequence: u64,
+        duration_ms: u64,
+        completion: types.ModelCompletion,
+        model: []const u8,
+        scope_digest: [Sha256.digest_length]u8,
+        observed_at_ms: i64,
+    ) !bool {
+        const input_tokens = completion.usage.input_tokens orelse {
+            try self.finishInvocationDurably(sequence, duration_ms, .possibly_billed_without_identity);
+            return false;
+        };
+        const output_tokens = completion.usage.output_tokens orelse {
+            try self.finishInvocationDurably(sequence, duration_ms, .possibly_billed_without_identity);
+            return false;
+        };
+        if (completion.generation_metadata_invalid or completion.delivery_ambiguous) {
+            try self.finishInvocationDurably(sequence, duration_ms, .ambiguous_delivery);
+            return false;
+        }
+        var digest: [Sha256.digest_length]u8 = undefined;
+        var hash = Sha256.init(.{});
+        hash.update("y2-reported-token-usage-v1\x00");
+        hash.update(&scope_digest);
+        hash.update(model);
+        hash.update(&.{0});
+        if (completion.generation_id) |external_id| {
+            validateExternalGenerationId(external_id) catch {
+                try self.finishInvocationDurably(sequence, duration_ms, .possibly_billed_without_identity);
+                return false;
+            };
+            hash.update(external_id);
+        } else {
+            // A response may report usage without a provider identity. This
+            // local fact is settled once with its invocation checkpoint.
+            var local_identity: [16]u8 = undefined;
+            io_mod.getIo().random(&local_identity);
+            hash.update(&local_identity);
+        }
+        hash.final(&digest);
+        const encoded = std.fmt.bytesToHex(digest[0..13].*, .upper);
+        var canonical_id: [30]u8 = undefined;
+        @memcpy(canonical_id[0..4], "gen_");
+        @memcpy(canonical_id[4..], &encoded);
+        const record = GenerationRecord{
+            .id = &canonical_id,
+            .created_at_ms = observed_at_ms,
+            .model = model,
+            // Cost remains unknown. Only known costs are summed, and the
+            // incomplete incident is persisted alongside these token facts.
+            .total_cost = 0,
+            .input_tokens = input_tokens,
+            .output_tokens = output_tokens,
+            .cache_read_tokens = completion.usage.cache_read_tokens orelse 0,
+            .cache_write_tokens = completion.usage.cache_write_tokens orelse 0,
+            .reasoning_tokens = completion.usage.reasoning_tokens,
+            .billable_web_search_calls = 0,
+        };
+        validateGenerationRecord(record) catch {
+            try self.finishInvocationDurably(sequence, duration_ms, .possibly_billed_without_identity);
+            return false;
+        };
+        return self.finishRecordedInvocationDurably(
+            alloc,
+            sequence,
+            duration_ms,
+            .observed_generation,
+            .gateway,
+            record,
+            false,
+        );
+    }
+
+    fn finishRecordedInvocationDurably(
+        self: *Usage,
+        alloc: Allocator,
+        sequence: u64,
+        duration_ms: u64,
+        outcome: DeliveryOutcome,
+        provider: model_provider.ProviderId,
+        record: GenerationRecord,
+        cost_complete: bool,
+    ) !bool {
+        self.checkpoint_mutex.lockUncancelable(io_mod.getIo());
+        const durable_bridge = self.checkpoint_sink != null;
+        const accepted = self.finishRecordedInvocationAccepted(
+            alloc,
+            sequence,
+            duration_ms,
+            outcome,
+            provider,
+            record.id,
+            record,
+            durable_bridge,
+            cost_complete,
+        ) catch |err| {
+            self.markBillingIncomplete();
+            _ = self.persistCheckpointBestEffortLocked();
+            self.checkpoint_mutex.unlock(io_mod.getIo());
+            debug_trace.logf(
+                "session",
+                "usage exact generation checkpointed incomplete reason={s}",
+                .{@errorName(err)},
+            );
+            return false;
+        };
+        if (!accepted) {
+            _ = self.persistCheckpointBestEffortLocked();
+            self.checkpoint_mutex.unlock(io_mod.getIo());
+            return false;
+        }
+        if (durable_bridge and !self.persistCheckpointBestEffortLocked()) {
+            self.checkpoint_mutex.unlock(io_mod.getIo());
+            return false;
+        }
+        self.checkpoint_mutex.unlock(io_mod.getIo());
+        if (durable_bridge) self.flushProfilePublications();
+        return true;
+    }
+
+    fn finishRecordedInvocationAccepted(
+        self: *Usage,
+        alloc: Allocator,
+        sequence: u64,
+        duration_ms: u64,
+        outcome: DeliveryOutcome,
+        provider: model_provider.ProviderId,
+        generation_id: []const u8,
+        record: GenerationRecord,
+        durable_bridge: bool,
+        cost_complete: bool,
+    ) !bool {
+        self.mutex.lockUncancelable(io_mod.getIo());
+        defer self.mutex.unlock(io_mod.getIo());
+        if (!self.finishInvocationUnlocked(sequence, duration_ms, outcome)) return false;
+        if (!cost_complete) {
+            self.billing = .incomplete;
+            self.recordIncidentUnlocked(.incomplete, record.created_at_ms);
+        }
+        try self.observeGenerationFieldsUnlocked(
+            alloc,
+            sequence,
+            generation_id,
+            provider,
+            if (cost_complete) exactUsageOrigin(provider) else "reported/gateway",
+            null,
+            null,
+            null,
+            null,
+        );
+        if (durable_bridge) {
+            try self.stagePublicationBacklogUnlocked(
+                alloc,
+                generationFactBorrowed(record),
+            );
+        } else {
+            try self.applyGenerationUnlocked(alloc, record, false);
+        }
+        return true;
+    }
+
     fn persistCheckpointRequiredLocked(self: *Usage) !void {
         const sink = self.checkpoint_sink orelse return;
         var persisted = try self.snapshotCurrent(sink.allocator);
@@ -907,26 +1186,6 @@ pub const Usage = struct {
         if (publication == .failed) self.flushProfilePublications();
     }
 
-    fn applyProviderBilling(
-        self: *Usage,
-        alloc: Allocator,
-        generation_id: []const u8,
-        billing: types.ProviderBilling,
-    ) !void {
-        try self.applyGeneration(alloc, .{
-            .id = generation_id,
-            .created_at_ms = billing.created_at_ms,
-            .model = billing.model,
-            .total_cost = billing.total_cost,
-            .input_tokens = billing.input_tokens,
-            .output_tokens = billing.output_tokens,
-            .cache_read_tokens = billing.cache_read_tokens,
-            .cache_write_tokens = billing.cache_write_tokens,
-            .reasoning_tokens = billing.reasoning_tokens,
-            .billable_web_search_calls = billing.billable_web_search_calls,
-        });
-    }
-
     fn applyGenerationUnlocked(
         self: *Usage,
         alloc: Allocator,
@@ -1060,12 +1319,16 @@ pub const Usage = struct {
         alloc: Allocator,
         fact: usage_report.GenerationFact,
     ) !void {
-        var owned = try fact.dupe(alloc);
-        var owns_fact = true;
-        defer if (owns_fact) owned.deinit(alloc);
-
         self.mutex.lockUncancelable(io_mod.getIo());
         defer self.mutex.unlock(io_mod.getIo());
+        try self.stagePublicationBacklogUnlocked(alloc, fact);
+    }
+
+    fn stagePublicationBacklogUnlocked(
+        self: *Usage,
+        alloc: Allocator,
+        fact: usage_report.GenerationFact,
+    ) !void {
         const pending_exists = for (self.pending.items) |pending| {
             if (std.mem.eql(u8, pending.id, fact.id)) break true;
         } else false;
@@ -1086,8 +1349,9 @@ pub const Usage = struct {
             self.dirty = true;
             return error.UsageCapacityExceeded;
         }
+        var owned = try fact.dupe(alloc);
+        errdefer owned.deinit(alloc);
         try self.publication_backlog.append(alloc, owned);
-        owns_fact = false;
         self.dirty = true;
     }
 
@@ -3095,8 +3359,141 @@ pub fn dupeSnapshotOwned(alloc: Allocator, source: Snapshot) !Snapshot {
     };
 }
 
+fn canonicalExactGenerationId(
+    provider: model_provider.ProviderId,
+    external_id: []const u8,
+    buffer: *[30]u8,
+) ![]const u8 {
+    if (provider == .gateway) {
+        try validateGenerationId(external_id);
+        return external_id;
+    }
+    try validateExternalGenerationId(external_id);
+    var digest: [Sha256.digest_length]u8 = undefined;
+    var hash = Sha256.init(.{});
+    hash.update(@tagName(provider));
+    hash.update(&.{0});
+    hash.update(external_id);
+    hash.final(&digest);
+    const encoded = std.fmt.bytesToHex(digest[0..13].*, .upper);
+    @memcpy(buffer[0..4], "gen_");
+    @memcpy(buffer[4..], &encoded);
+    return buffer;
+}
+
+fn exactUsageOrigin(provider: model_provider.ProviderId) []const u8 {
+    return switch (provider) {
+        .gateway => "exact/gateway",
+        .codex => "exact/codex",
+        .grok => "exact/grok",
+    };
+}
+
+test "direct exact generation IDs are deterministic and provider scoped" {
+    var first_buffer: [30]u8 = undefined;
+    var replay_buffer: [30]u8 = undefined;
+    var other_provider_buffer: [30]u8 = undefined;
+    const first = try canonicalExactGenerationId(
+        .codex,
+        "response-shared-id",
+        &first_buffer,
+    );
+    const replay = try canonicalExactGenerationId(
+        .codex,
+        "response-shared-id",
+        &replay_buffer,
+    );
+    const other_provider = try canonicalExactGenerationId(
+        .grok,
+        "response-shared-id",
+        &other_provider_buffer,
+    );
+
+    try std.testing.expectEqualStrings(first, replay);
+    try std.testing.expect(!std.mem.eql(u8, first, other_provider));
+    try std.testing.expect(types.validGatewayGenerationId(first));
+    try std.testing.expect(types.validGatewayGenerationId(other_provider));
+
+    var gateway_buffer: [30]u8 = undefined;
+    const gateway_id = "gen_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    try std.testing.expectEqualStrings(
+        gateway_id,
+        try canonicalExactGenerationId(.gateway, gateway_id, &gateway_buffer),
+    );
+    try std.testing.expectError(
+        error.InvalidGenerationId,
+        canonicalExactGenerationId(.codex, "", &gateway_buffer),
+    );
+    try std.testing.expectError(
+        error.InvalidGenerationId,
+        canonicalExactGenerationId(.grok, "response\ninvalid", &gateway_buffer),
+    );
+}
+
+test "reported token usage persists counts without claiming a known price or settling twice" {
+    const alloc = std.testing.allocator;
+    var usage = Usage.initFresh();
+    defer usage.deinit(alloc);
+    const observation = try InvocationObservation.begin(&usage);
+    const completion: types.ModelCompletion = .{
+        .generation_id = "chatcmpl-local-1",
+        .usage = .{ .input_tokens = 13, .output_tokens = 4 },
+    };
+    const outcome: stream_provider.UsageOutcome = .{ .reported_tokens = .{
+        .model = "y2-agent",
+        .scope_digest = [_]u8{1} ** Sha256.digest_length,
+        .observed_at_ms = 1000,
+    } };
+    try observation.complete(alloc, completion, outcome);
+    try observation.complete(alloc, completion, outcome);
+    var snapshot = try usage.snapshot(alloc);
+    defer snapshot.deinit(alloc);
+    try std.testing.expectEqual(Availability.incomplete, snapshot.billing);
+    try std.testing.expectEqual(@as(u64, 13), snapshot.input_tokens);
+    try std.testing.expectEqual(@as(u64, 4), snapshot.output_tokens);
+    try std.testing.expectEqual(@as(?u64, 1), snapshot.request_count);
+    try std.testing.expectEqual(@as(f64, 0), snapshot.total_cost);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.pending.len);
+    try std.testing.expect(snapshot.incidents.len > 0);
+    try std.testing.expectEqualStrings("y2-agent", snapshot.models[0].model);
+    var serialized: std.Io.Writer.Allocating = .init(alloc);
+    defer serialized.deinit();
+    try writeRichSnapshot(&serialized.writer, snapshot);
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, serialized.writer.buffered(), .{});
+    defer parsed.deinit();
+    var restored = try parseSnapshotValue(alloc, parsed.value);
+    defer restored.deinit(alloc);
+    try std.testing.expect(snapshotEql(snapshot, restored));
+}
+
+test "reported token usage never fabricates totals for a response without usage" {
+    const alloc = std.testing.allocator;
+    var usage = Usage.initFresh();
+    defer usage.deinit(alloc);
+    const observation = try InvocationObservation.begin(&usage);
+    try observation.complete(alloc, .{}, .{ .reported_tokens = .{
+        .model = "y2-agent",
+        .scope_digest = [_]u8{1} ** Sha256.digest_length,
+        .observed_at_ms = 1000,
+    } });
+    var snapshot = try usage.snapshot(alloc);
+    defer snapshot.deinit(alloc);
+    try std.testing.expectEqual(Availability.incomplete, snapshot.billing);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.input_tokens);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.output_tokens);
+    try std.testing.expectEqual(@as(?u64, 0), snapshot.request_count);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.models.len);
+}
+
 fn validateGenerationId(id: []const u8) !void {
     if (!types.validGatewayGenerationId(id)) return error.InvalidGenerationId;
+}
+
+fn validateExternalGenerationId(id: []const u8) !void {
+    if (id.len == 0 or id.len > max_identifier_bytes or !std.unicode.utf8ValidateSlice(id)) {
+        return error.InvalidGenerationId;
+    }
+    for (id) |byte| if (std.ascii.isControl(byte)) return error.InvalidGenerationId;
 }
 
 fn validateModel(model: []const u8) !void {
@@ -3226,14 +3623,13 @@ fn testGatewayUsageOutcome(
     generation_id: []const u8,
     immediate: bool,
 ) stream_provider.UsageOutcome {
-    const reference = testGatewayUsageReference(
-        generation_id,
-        "https://example.invalid",
-    );
     return if (immediate)
-        .{ .immediate = reference }
+        .{ .exact = .gateway }
     else
-        .{ .deferred = reference };
+        .{ .deferred = testGatewayUsageReference(
+            generation_id,
+            "https://example.invalid",
+        ) };
 }
 
 fn testGatewayUsageReference(
@@ -4108,11 +4504,21 @@ test "invalid generation identity settles the provider observation" {
     const observation = try InvocationObservation.begin(&usage);
     try observation.complete(
         alloc,
-        .{ .generation_id = "resp_provider_local" },
-        .{ .immediate = testGatewayUsageReference(
-            "resp_provider_local",
-            "https://example.invalid",
-        ) },
+        .{
+            .generation_id = "resp_provider_local",
+            .billing = .{
+                .created_at_ms = 1,
+                .model = "provider/model",
+                .total_cost = 0,
+                .input_tokens = 1,
+                .output_tokens = 1,
+                .cache_read_tokens = 0,
+                .cache_write_tokens = 0,
+                .reasoning_tokens = null,
+                .billable_web_search_calls = 0,
+            },
+        },
+        .{ .exact = .gateway },
     );
 
     var snapshot = try usage.snapshot(alloc);
@@ -4160,6 +4566,7 @@ test "rejected observed generation settles without publishing its identity or bi
         alloc,
         .{
             .generation_id = rejected_id,
+            .generation_metadata_invalid = true,
             .billing = .{
                 .created_at_ms = 1,
                 .model = "provider/model",
@@ -4172,10 +4579,7 @@ test "rejected observed generation settles without publishing its identity or bi
                 .billable_web_search_calls = 0,
             },
         },
-        .{ .immediate = testGatewayUsageReference(
-            rejected_id,
-            "https://provider.example\ninvalid",
-        ) },
+        .{ .exact = .gateway },
     );
 
     var snapshot = try usage.snapshot(alloc);
@@ -4471,6 +4875,9 @@ test "terminal Gateway billing settles the durable observation immediately" {
 
 test "duplicate Gateway terminal callback does not republish inline billing" {
     const alloc = std.testing.allocator;
+    const CheckpointProbe = struct {
+        fn persist(_: *anyopaque, _: Snapshot) !void {}
+    };
     const PublicationProbe = struct {
         generations: usize = 0,
 
@@ -4484,8 +4891,14 @@ test "duplicate Gateway terminal callback does not republish inline billing" {
     };
 
     var probe = PublicationProbe{};
+    var checkpoint_context: u8 = 0;
     var usage = Usage.initFresh();
     defer usage.deinit(alloc);
+    usage.configureCheckpointSink(.{
+        .context = &checkpoint_context,
+        .allocator = alloc,
+        .persist = CheckpointProbe.persist,
+    });
     usage.configurePublicationSink(.{
         .context = &probe,
         .allocator = alloc,

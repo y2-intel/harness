@@ -486,6 +486,77 @@ describe.skipIf(!tmuxAvailable())("config persistence", () => {
   );
 
 
+  serialTest(
+    "Escape keeps the model picker dismissed until the model trigger restarts",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "y2-model-picker-dismissal-"));
+      const gateway = startFakeGateway([], {
+        models: [{
+          id: "xai/grok-build-1",
+          type: "language",
+          released: 1,
+          tags: ["tool-use"],
+        }],
+      });
+      try {
+        const home = join(root, "home");
+        const workspace = join(root, "workspace");
+        const stderrPath = join(root, "stderr.log");
+        mkdirSync(join(home, ".y2"), { recursive: true, mode: 0o700 });
+        mkdirSync(workspace);
+        writeFileSync(
+          join(home, ".y2", "settings.json"),
+          JSON.stringify({ model: "openai/gpt-5" }) + "\n",
+        );
+
+        session = await TmuxSession.create({
+          cwd: realpathSync(workspace),
+          env: {
+            ...NO_AUTH,
+            HOME: home,
+            OPENAI_API_KEY: "fake-picker-key",
+            OPENAI_BASE_URL: `${gateway.baseUrl}/v1`,
+          },
+          stderrPath,
+        });
+        await session.waitForText("Run /help", TIMEOUT);
+        await session.sendLiteral("/model");
+        await session.sendKeys("Tab");
+        await session.waitForText("xai/grok-build-1", TIMEOUT);
+
+        await session.sendKeys("Escape");
+        await session.waitForPane(
+          (pane) =>
+            composerContains(pane, "/model") &&
+            !pane.includes("xai/grok-build-1"),
+          TIMEOUT,
+        );
+        await session.sendLiteral("x");
+        await session.waitForPane(
+          (pane) =>
+            composerContains(pane, "/model x") &&
+            !pane.includes("xai/grok-build-1"),
+          TIMEOUT,
+        );
+
+        await session.sendKeys("C-u");
+        await session.sendLiteral("/model");
+        await session.sendKeys("Tab");
+        await session.waitForText("xai/grok-build-1", TIMEOUT);
+
+        await session.sendKeys("C-u");
+        await session.sendText("/quit");
+        await session.waitForSessionEnd(TIMEOUT);
+        session = null;
+        expect(readFileSync(stderrPath, "utf8")).toBe("");
+      } finally {
+        gateway.stop();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
   test(
     "Fast command rejects saved models without fast support",
     async () => {
@@ -529,6 +600,79 @@ describe.skipIf(!tmuxAvailable())("config persistence", () => {
       }
     },
     30_000,
+  );
+
+  test(
+    "model picker selection persists when a matching skill exists",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "y2-model-picker-skill-"));
+      const gateway = startFakeGateway([], {
+        models: [{
+          id: "xai/grok-build-1",
+          type: "language",
+          released: 1,
+          tags: ["tool-use"],
+        }],
+      });
+      try {
+        const home = join(root, "home");
+        const workspace = join(root, "workspace");
+        const stderrPath = join(root, "stderr.log");
+        const skillRoot = join(home, ".y2", "skills", "model-helper");
+        mkdirSync(skillRoot, { recursive: true, mode: 0o700 });
+        mkdirSync(workspace);
+        writeFileSync(
+          join(skillRoot, "SKILL.md"),
+          "---\nname: model-helper\ndescription: model helper skill\n---\n\nModel helper body\n",
+        );
+        const workspaceRoot = realpathSync(workspace);
+
+        session = await TmuxSession.create({
+          cwd: workspaceRoot,
+          env: {
+            ...NO_AUTH,
+            HOME: home,
+            OPENAI_API_KEY: "fake-picker-key",
+            OPENAI_BASE_URL: `${gateway.baseUrl}/v1`,
+          },
+          stderrPath,
+        });
+        await session.waitForComposer(TIMEOUT);
+        await session.sendLiteral("/model");
+        await session.sendKeys("Tab");
+        const pickerPane = await session.waitForText("xai/grok-build-1", TIMEOUT);
+        expect(pickerPane).toContain("xai/grok-build-1");
+        await session.sendKeys("Enter");
+        await session.waitForText("● Switched to xai/grok-build-1", TIMEOUT);
+        await session.waitForPane(
+          (pane) =>
+            hasEmptyComposer(pane) &&
+            !pane.includes("model-helper"),
+          TIMEOUT,
+        );
+        expect(await session.capturePane()).not.toContain("saved to user settings");
+
+        const stored = JSON.parse(readFileSync(join(home, ".y2", "settings.json"), "utf8"));
+        expect(stored.models.gateway).toBe("xai/grok-build-1");
+        expect(stored).not.toHaveProperty("effort");
+        expect(stored).not.toHaveProperty("fast_mode");
+
+        const scrollback = await session.captureFullScrollbackEscapes();
+        expect(scrollback).toContain("grok-build-1");
+        expect(scrollback).toContain("● Switched to xai/grok-build-1");
+        expect(gateway.requests).toHaveLength(0);
+
+        await session.sendText("/quit");
+        await session.waitForSessionEnd(TIMEOUT);
+        session = null;
+
+        expect(readFileSync(stderrPath, "utf8")).toBe("");
+      } finally {
+        gateway.stop();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
   );
 
   serialTest(

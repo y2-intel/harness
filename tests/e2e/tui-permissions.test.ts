@@ -401,11 +401,12 @@ describe.skipIf(!tmuxAvailable())("tui: file permissions", () => {
   );
 
   test(
-    "pauses paced assistant text while a file approval is active",
+    "renders assistant blocks before file approval and defers continuation until decision",
     async () => {
       const root = createIsolatedRoot();
       const target = join(root.workspace, "pacer-gate.txt");
-      const marker = "PENDING-FILE-APPROVAL-PACER-SENTINEL";
+      const marker = "PRE-FILE-APPROVAL-ASSISTANT-SENTINEL";
+      const completion = "file approval pacer gate completed";
       const tapePath = join(root.root, "pacer-gate.y2tape");
       const gateway = startFakeGateway([
         fakeGatewaySse([
@@ -428,7 +429,7 @@ describe.skipIf(!tmuxAvailable())("tui: file permissions", () => {
             finishReason: { unified: "tool-calls", raw: "tool-calls" },
           },
         ]),
-        finalText("file approval pacer gate completed"),
+        finalText(completion),
       ]);
       const { session, stderrPath } = await launch(
         root,
@@ -442,23 +443,43 @@ describe.skipIf(!tmuxAvailable())("tui: file permissions", () => {
         required: ["pacer-gate.txt", "+ must not be written"],
         timeoutMs: 5_000,
       });
+      const approvalGrid = normalizeVolatileStatusRows(await session.capturePaneGrid());
+      expect(approvalGrid.join("\n")).toContain(marker);
       await session.sendKeys("Down");
       await session.sendKeys("Up");
+      expect(normalizeVolatileStatusRows(await session.capturePaneGrid())).toEqual(approvalGrid);
 
       const stdoutBeforeDecision = Buffer.concat(
         stdoutFrames(tapePath).map((frame) => frame.payload),
-      ).toString().replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-      expect(stdoutBeforeDecision.includes(marker)).toBe(false);
+      ).toString();
+      const approvalEnter = stdoutBeforeDecision.indexOf("\x1b[?1049h");
+      expect(approvalEnter).toBeGreaterThanOrEqual(0);
+      const beforeApproval = stdoutBeforeDecision.slice(0, approvalEnter)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+      const duringApproval = stdoutBeforeDecision.slice(approvalEnter)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+      expect(beforeApproval).toContain(marker);
+      expect(duringApproval).toContain("pacer-gate.txt");
+      expect(stdoutBeforeDecision).not.toContain("\x1b[?1049l");
+      expect(stdoutBeforeDecision).not.toContain(completion);
+      expect(gateway.requests).toHaveLength(1);
+      expect(existsSync(target)).toBe(false);
 
       const approvalExitFrameStart = stdoutFrames(tapePath).length;
       await decide(session, 3);
-      await session.waitForText("file approval pacer gate completed", 5_000);
+      await session.waitForText(completion, 5_000);
       expectAtomicApprovalExit(tapePath, approvalExitFrameStart);
 
       const stdoutAfterDecision = Buffer.concat(
         stdoutFrames(tapePath).map((frame) => frame.payload),
-      ).toString().replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-      expect(stdoutAfterDecision).toContain(marker);
+      ).toString();
+      const approvalExit = stdoutAfterDecision.indexOf("\x1b[?1049l");
+      expect(approvalExit).toBeGreaterThan(approvalEnter);
+      const entireApproval = stdoutAfterDecision.slice(approvalEnter, approvalExit)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+      expect(entireApproval).not.toContain(completion);
+      expect(stdoutAfterDecision.slice(approvalExit)).toContain(completion);
+      expect(gateway.requests).toHaveLength(2);
       expect(existsSync(target)).toBe(false);
       expectCleanStderr(stderrPath);
     },

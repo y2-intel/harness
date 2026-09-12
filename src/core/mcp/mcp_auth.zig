@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const debug_trace = @import("../shared/debug_trace.zig");
 const io_mod = @import("../shared/io.zig");
 const operation_control = @import("operation_control.zig");
+const browser_callback = @import("../auth/browser_callback.zig");
 const secret = @import("../auth/secret.zig");
 
 const Allocator = std.mem.Allocator;
@@ -1328,17 +1329,13 @@ fn requestInteractiveAuthorization(
     if (!std.mem.startsWith(u8, target, "/callback?")) {
         return error.InvalidAuthorizationCallback;
     }
-    var writer_buffer: [1024]u8 = undefined;
-    var writer = stream.writer(io_mod.getIo(), &writer_buffer);
-    try writer.interface.writeAll(
-        "HTTP/1.1 200 OK\r\n" ++
-            "Content-Type: text/plain; charset=utf-8\r\n" ++
-            "Content-Length: 49\r\n" ++
-            "Connection: close\r\n\r\n" ++
-            "Authorization received. You can return to y2 now.",
-    );
-    try writer.interface.flush();
-    return parseAuthorizationRedirect(alloc, target);
+    var response = parseAuthorizationRedirect(alloc, target) catch |err| {
+        browser_callback.writeResponse(stream, .failed, null) catch {};
+        return err;
+    };
+    errdefer response.deinit(alloc);
+    try browser_callback.writeResponse(stream, .ok, null);
+    return response;
 }
 
 fn validateRedirectTarget(location: []const u8, redirect_uri: []const u8) !void {
@@ -1521,6 +1518,7 @@ fn chooseTokenEndpointAuthMethod(
     if (has_secret and metadata.supports(.client_secret_basic)) return "client_secret_basic";
     if (has_secret and metadata.supports(.client_secret_post)) return "client_secret_post";
     if (metadata.supports(.none)) return "none";
+    if (!has_secret and metadata.supports(.s256)) return "none";
     if (metadata.supports(.client_secret_basic)) return "client_secret_basic";
     if (metadata.supports(.client_secret_post)) return "client_secret_post";
     return error.UnsupportedTokenEndpointAuthenticationMethod;
@@ -2330,6 +2328,25 @@ test "authorization metadata defaults omitted token endpoint authentication to c
     try std.testing.expectEqualStrings(
         "client_secret_basic",
         try chooseTokenEndpointAuthMethod(metadata, false),
+    );
+}
+
+test "authorization metadata chooses none for secretless clients when S256 PKCE is supported" {
+    const alloc = std.testing.allocator;
+    var metadata = try parseAuthorizationMetadata(
+        alloc,
+        "{\"issuer\":\"https://mcp.slack.com\",\"authorization_endpoint\":\"https://slack.com/oauth/v2_user/authorize\",\"token_endpoint\":\"https://slack.com/api/oauth.v2.user.access\",\"token_endpoint_auth_methods_supported\":[\"client_secret_post\"],\"code_challenge_methods_supported\":[\"S256\"]}",
+        "https://mcp.slack.com",
+    );
+    defer metadata.deinit(alloc);
+
+    try std.testing.expectEqualStrings(
+        "none",
+        try chooseTokenEndpointAuthMethod(metadata, false),
+    );
+    try std.testing.expectEqualStrings(
+        "client_secret_post",
+        try chooseTokenEndpointAuthMethod(metadata, true),
     );
 }
 

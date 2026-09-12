@@ -16,6 +16,7 @@ pub const TopLevelKind = enum {
     setup,
     status,
     permissions,
+    mcp,
     models,
     provider,
     doctor,
@@ -49,7 +50,6 @@ pub const SlashKind = enum {
     image,
     images,
     model,
-    models,
     permissions,
     allowlist,
     stats,
@@ -178,7 +178,7 @@ pub fn childChatSlashRegistry(
     var count: usize = 0;
     for (registry.commands) |spec| {
         switch (spec.kind) {
-            .quit, .models, .skills => {
+            .quit, .model, .skills => {
                 std.debug.assert(count < storage.len);
                 storage[count] = spec;
                 count += 1;
@@ -191,6 +191,7 @@ pub fn childChatSlashRegistry(
 
 pub const HelpMenu = struct {
     active: bool = false,
+    category: ?SlashPresentationCategory = null,
     selected_index: usize = 0,
     window_start: usize = 0,
 
@@ -207,8 +208,26 @@ pub const HelpMenu = struct {
         self.window_start = 0;
     }
 
+    pub fn cycleCategory(self: *HelpMenu, delta: i32) bool {
+        if (!self.active or delta == 0) return false;
+        const count: i32 = @intCast(std.meta.fields(SlashPresentationCategory).len + 1);
+        var next: i32 = if (self.category) |category|
+            @as(i32, @intCast(@intFromEnum(category))) + 1
+        else
+            0;
+        next += delta;
+        while (next < 0) next += count;
+        while (next >= count) next -= count;
+        self.category = if (next == 0)
+            null
+        else
+            @enumFromInt(next - 1);
+        self.resetForQuery();
+        return true;
+    }
+
     pub fn move(self: *HelpMenu, registry: SlashRegistry, query: []const u8, delta: i32, visible_items: u16) bool {
-        const item_count = helpCatalogCount(registry, query);
+        const item_count = helpCatalogCountForCategory(registry, self.category, query);
         if (!self.active or item_count == 0) return false;
 
         const current: i32 = @intCast(self.selected_index % item_count);
@@ -226,9 +245,9 @@ pub const HelpMenu = struct {
     }
 
     pub fn selectedSpec(self: *const HelpMenu, registry: SlashRegistry, query: []const u8) ?*const SlashSpec {
-        const item_count = helpCatalogCount(registry, query);
+        const item_count = helpCatalogCountForCategory(registry, self.category, query);
         if (!self.active or item_count == 0) return null;
-        return helpCatalogSpecAt(registry, query, self.selected_index % item_count);
+        return helpCatalogSpecAtForCategory(registry, self.category, query, self.selected_index % item_count);
     }
 };
 
@@ -384,6 +403,17 @@ pub fn helpCatalogCount(registry: SlashRegistry, query: []const u8) usize {
     return count;
 }
 
+pub fn helpCatalogCountForCategory(
+    registry: SlashRegistry,
+    category: ?SlashPresentationCategory,
+    query: []const u8,
+) usize {
+    return if (category) |value|
+        helpCatalogCategoryCount(registry, query, value)
+    else
+        helpCatalogCount(registry, query);
+}
+
 pub fn helpCatalogCategoryCount(registry: SlashRegistry, query: []const u8, category: SlashPresentationCategory) usize {
     var count: usize = 0;
     for (registry.commands) |spec| {
@@ -401,6 +431,22 @@ pub fn helpCatalogSpecAt(registry: SlashRegistry, query: []const u8, display_ind
             if (current == display_index) return spec;
             current += 1;
         }
+    }
+    return null;
+}
+
+pub fn helpCatalogSpecAtForCategory(
+    registry: SlashRegistry,
+    category: ?SlashPresentationCategory,
+    query: []const u8,
+    display_index: usize,
+) ?*const SlashSpec {
+    const value = category orelse return helpCatalogSpecAt(registry, query, display_index);
+    var current: usize = 0;
+    for (registry.commands) |*spec| {
+        if (spec.presentation_category != value or !helpCatalogSpecMatches(spec.*, query)) continue;
+        if (current == display_index) return spec;
+        current += 1;
     }
     return null;
 }
@@ -1696,20 +1742,17 @@ test "slash completion matches prefix and aliases" {
 
 test "slash completion ranks exact prefix and substring command matches" {
     const specs = [_]SlashSpec{
-        .{ .kind = .models, .command = "/models", .help_entry = "/models", .completion_description = "browse models", .presentation_category = .model },
         .{ .kind = .rename_session, .command = "/rename", .help_entry = "/rename <title>", .completion_description = "rename session", .presentation_category = .session },
         .{ .kind = .model, .command = "/model", .help_entry = "/model <id>", .completion_description = "choose model", .presentation_category = .model },
     };
     const registry = SlashRegistry{ .commands = specs[0..] };
 
-    try std.testing.expectEqual(@as(usize, 2), slashCompletionCount(registry, "/model"));
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(registry, "/model"));
     try std.testing.expectEqualStrings("/model", nthSlashCompletion(registry, "/model", 0).?);
     try std.testing.expectEqualStrings("choose model", nthSlashCompletionDescription(registry, "/model", 0).?);
-    try std.testing.expectEqualStrings("/models", nthSlashCompletion(registry, "/model", 1).?);
 
-    try std.testing.expectEqual(@as(usize, 2), slashCompletionCount(registry, "/mo"));
-    try std.testing.expectEqualStrings("/models", nthSlashCompletion(registry, "/mo", 0).?);
-    try std.testing.expectEqualStrings("/model", nthSlashCompletion(registry, "/mo", 1).?);
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(registry, "/mo"));
+    try std.testing.expectEqualStrings("/model", nthSlashCompletion(registry, "/mo", 0).?);
 
     try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(registry, "/name"));
     try std.testing.expectEqualStrings("/rename", nthSlashCompletion(registry, "/name", 0).?);
@@ -1744,7 +1787,7 @@ test "slash completion categories follow canonical entries" {
 test "help catalog groups visible commands and searches all command metadata" {
     const registry = testSlashRegistry();
 
-    try std.testing.expectEqual(@as(usize, 36), helpCatalogCount(registry, ""));
+    try std.testing.expectEqual(@as(usize, 35), helpCatalogCount(registry, ""));
     try std.testing.expectEqualStrings("/help", helpCatalogSpecAt(registry, "", 0).?.command);
     try std.testing.expectEqual(@as(usize, 5), helpCatalogCategoryCount(registry, "", .general));
     try std.testing.expectEqual(@as(usize, 3), helpCatalogCount(registry, "appearance"));
@@ -1822,9 +1865,18 @@ test "child chat slash registry exposes only locally handled commands" {
 
     try std.testing.expectEqual(@as(usize, 3), child.commands.len);
     try std.testing.expect(matchesSlashExact(child, "/quit", .quit));
-    try std.testing.expect(matchesSlashExact(child, "/models", .models));
+    try std.testing.expect(matchesSlashExact(child, "/model", .model));
+    try std.testing.expect(matchesSlashExact(child, "/models", .model));
     try std.testing.expect(matchesSlashExact(child, "/skills", .skills));
     try std.testing.expect(child.matchExact("/help") == null);
+}
+
+test "interactive model command preserves the plural compatibility alias" {
+    const registry = testSlashRegistry();
+    try std.testing.expect(matchesSlashExact(registry, "/model", .model));
+    try std.testing.expect(matchesSlashExact(registry, "/models", .model));
+    try std.testing.expectEqualStrings("/models", nthSlashCompletion(registry, "/models", 0).?);
+    try std.testing.expectEqualStrings("/models", matchedSlashPrefix(registry, "/models provider/model", .model).?);
 }
 
 test "default slash registry resolves primary commands and aliases" {
@@ -2055,10 +2107,9 @@ test "slash completion labels strip argument prefixes" {
 }
 
 test "slash completion descriptions follow completion matches" {
-    try std.testing.expectEqual(@as(usize, 2), slashCompletionCount(testSlashRegistry(), "/mo"));
+    try std.testing.expectEqual(@as(usize, 1), slashCompletionCount(testSlashRegistry(), "/mo"));
     try std.testing.expectEqualStrings("/model", nthSlashCompletion(testSlashRegistry(), "/mo", 0).?);
     try std.testing.expectEqualStrings("choose what model and reasoning effort to use", nthSlashCompletionDescription(testSlashRegistry(), "/mo", 0).?);
-    try std.testing.expectEqualStrings("/models", nthSlashCompletion(testSlashRegistry(), "/mo", 1).?);
     try std.testing.expectEqualStrings("start a fresh session and keep background processes", nthSlashCompletionDescription(testSlashRegistry(), "/cl", 0).?);
     try std.testing.expectEqualStrings("undo the latest tracked file operation", nthSlashCompletionDescription(testSlashRegistry(), "/un", 0).?);
     try std.testing.expectEqualStrings("open the y2 feedback form", nthSlashCompletionDescription(testSlashRegistry(), "/fee", 0).?);

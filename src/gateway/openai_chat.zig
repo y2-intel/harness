@@ -27,6 +27,8 @@ const max_tool_identity_bytes: usize = 1024;
 const max_tool_arguments_bytes: usize = 8 * 1024 * 1024;
 const transfer_buffer_bytes: usize = 256 * 1024;
 const connect_timeout_ms: i64 = 30_000;
+const response_head_timeout_ms: i64 = 30_000;
+const usage_trailer_timeout_ms: i64 = 1_000;
 const user_agent = "y2-intel-harness/" ++ build_options.app_version;
 
 pub const Mode = enum {
@@ -137,6 +139,7 @@ pub fn buildRequest(
     }
 
     if (mode == .openai_compatible) {
+        try writer.writeAll(",\"stream_options\":{\"include_usage\":true}");
         if (request.max_output_tokens) |limit| {
             try writer.print(",\"max_tokens\":{d}", .{limit});
         }
@@ -444,9 +447,17 @@ const Reducer = struct {
             self.generation_id = try alloc.dupe(u8, id);
         };
         if (root.get("usage")) |usage| if (usage == .object) {
-            self.usage.input_tokens = unsignedField(usage.object, "prompt_tokens") orelse self.usage.input_tokens;
-            self.usage.output_tokens = unsignedField(usage.object, "completion_tokens") orelse self.usage.output_tokens;
+            if (self.finish_reason != null) {
+                // A trailer may fill missing totals, but cannot replace totals
+                // already reported with the completed choice.
+                self.usage.input_tokens = self.usage.input_tokens orelse unsignedField(usage.object, "prompt_tokens");
+                self.usage.output_tokens = self.usage.output_tokens orelse unsignedField(usage.object, "completion_tokens");
+            } else {
+                self.usage.input_tokens = unsignedField(usage.object, "prompt_tokens") orelse self.usage.input_tokens;
+                self.usage.output_tokens = unsignedField(usage.object, "completion_tokens") orelse self.usage.output_tokens;
+            }
         };
+        if (self.finish_reason != null) return;
 
         const choices = root.get("choices") orelse return;
         if (choices != .array or choices.array.items.len == 0) return;
@@ -643,6 +654,13 @@ const SseReader = struct {
     }
 };
 
+// The transport must bound pending reads once start_fn returns. Without that
+// guarantee, preserve finish-immediate behavior instead of waiting for metadata.
+const UsageTrailer = struct {
+    context: *anyopaque,
+    start_fn: *const fn (*anyopaque) anyerror!void,
+};
+
 pub fn consumeSse(
     alloc: Allocator,
     reader: anytype,
@@ -653,6 +671,23 @@ pub fn consumeSse(
     on_tool_input_chunk: ?stream_provider.StreamCallback,
     cancel_flag: *std.atomic.Value(bool),
     content_capture_limit: ?usize,
+) !types.ModelCompletion {
+    // Host reads can suspend without a deadline. Preserve their immediate
+    // completion until that transport supports bounded trailer reads.
+    return consumeSseWithUsageTrailer(alloc, reader, callback_ctx, on_content_chunk, on_tool_start, on_reasoning_chunk, on_tool_input_chunk, cancel_flag, content_capture_limit, null);
+}
+
+fn consumeSseWithUsageTrailer(
+    alloc: Allocator,
+    reader: anytype,
+    callback_ctx: *anyopaque,
+    on_content_chunk: stream_provider.StreamCallback,
+    on_tool_start: ?stream_provider.ToolStartCallback,
+    on_reasoning_chunk: ?stream_provider.StreamCallback,
+    on_tool_input_chunk: ?stream_provider.StreamCallback,
+    cancel_flag: *std.atomic.Value(bool),
+    content_capture_limit: ?usize,
+    usage_trailer: ?UsageTrailer,
 ) !types.ModelCompletion {
     var reducer: Reducer = .{};
     defer reducer.deinit(alloc);
@@ -665,13 +700,56 @@ pub fn consumeSse(
         .on_reasoning = on_reasoning_chunk,
         .on_tool_input = on_tool_input_chunk,
     };
-    while (try sse.next(alloc, reader)) |json_text| {
+    var awaiting_usage = false;
+    while (true) {
+        const json_text = (sse.next(alloc, reader) catch |err| {
+            if (cancel_flag.load(.seq_cst)) return error.Cancelled;
+            if (awaiting_usage and err == error.ReadFailed) break;
+            return err;
+        }) orelse break;
         defer sse.release();
-        try reducer.applyJson(alloc, json_text, callbacks, cancel_flag, content_capture_limit);
-        if (reducer.finish_reason != null) break;
+        reducer.applyJson(alloc, json_text, callbacks, cancel_flag, content_capture_limit) catch |err| {
+            // Malformed optional metadata does not invalidate an answer whose
+            // choice already finished. Incomplete answers still fail normally.
+            if (awaiting_usage and err == error.InvalidOpenAIChatEvent) break;
+            return err;
+        };
+        if (reducer.finish_reason != null) {
+            if (reducer.usage.input_tokens != null and reducer.usage.output_tokens != null) break;
+            const trailer = usage_trailer orelse break;
+            if (!awaiting_usage) {
+                trailer.start_fn(trailer.context) catch break;
+                awaiting_usage = true;
+            }
+        }
     }
     return reducer.finish(alloc, sse.saw_done);
 }
+
+const UsageTrailerWatch = struct {
+    stream: std.Io.net.Stream,
+    cancel_flag: *std.atomic.Value(bool),
+    outer_deadline: ?std.Io.Clock.Timestamp,
+    done: std.atomic.Value(bool) = .init(false),
+    thread: ?std.Thread = null,
+
+    fn start(raw: *anyopaque) !void {
+        const self: *@This() = @ptrCast(@alignCast(raw));
+        var deadline = std.Io.Clock.Timestamp.fromNow(io_mod.getIo(), .{
+            .clock = .awake,
+            .raw = .fromMilliseconds(usage_trailer_timeout_ms),
+        });
+        if (self.outer_deadline) |limit| {
+            if (std.Io.Clock.Timestamp.compare(limit, .lt, deadline)) deadline = limit;
+        }
+        self.thread = try http_runtime.spawnHttpCancelWatcherBounded(&self.done, self.cancel_flag, deadline, self.stream);
+    }
+
+    fn deinit(self: *@This()) void {
+        self.done.store(true, .seq_cst);
+        if (self.thread) |thread| thread.join();
+    }
+};
 
 fn streamCompletion(
     _: ?*anyopaque,
@@ -728,6 +806,46 @@ const OpenRequestOperation = struct {
     }
 };
 
+const ReceivedHead = struct {
+    response: std.http.Client.Response,
+
+    // The request owns the response buffers and closes the connection after
+    // the bounded operation and its cancellation have both been drained.
+    pub fn deinit(_: *@This(), _: Allocator) void {}
+};
+
+const ReceiveHeadOperation = struct {
+    request: *std.http.Client.Request,
+
+    pub fn run(self: *@This()) !ReceivedHead {
+        return .{ .response = try self.request.receiveHead(&.{}) };
+    }
+};
+
+fn response_head_deadline(now: std.Io.Clock.Timestamp, outer: ?std.Io.Clock.Timestamp) std.Io.Clock.Timestamp {
+    const deadline: std.Io.Clock.Timestamp = .{
+        .clock = .awake,
+        .raw = now.raw.addDuration(.fromMilliseconds(response_head_timeout_ms)),
+    };
+    if (outer) |limit| if (std.Io.Clock.Timestamp.compare(limit, .lt, deadline)) return limit;
+    return deadline;
+}
+
+test "direct response head budget preserves an earlier provider deadline" {
+    const now = std.Io.Clock.Timestamp.now(std.testing.io, .awake);
+    const earlier: std.Io.Clock.Timestamp = .{
+        .clock = .awake,
+        .raw = now.raw.addDuration(.fromMilliseconds(1)),
+    };
+    const later: std.Io.Clock.Timestamp = .{
+        .clock = .awake,
+        .raw = now.raw.addDuration(.fromMilliseconds(60_000)),
+    };
+    try std.testing.expect(std.Io.Clock.Timestamp.compare(response_head_deadline(now, earlier), .eq, earlier));
+    try std.testing.expect(std.Io.Clock.Timestamp.compare(response_head_deadline(now, later), .eq, response_head_deadline(now, null)));
+    try std.testing.expect(std.Io.Clock.Timestamp.compare(response_head_deadline(now, null), .lt, later));
+}
+
 pub fn streamPrepared(
     alloc: Allocator,
     request: stream_provider.ModelRequest,
@@ -783,7 +901,15 @@ pub fn streamPrepared(
     if (http_request.connection) |connection| try connection.flush();
     if (request.cancel_flag.load(.seq_cst)) return error.Cancelled;
 
-    var response = try http_request.receiveHead(&.{});
+    var receive_head = ReceiveHeadOperation{ .request = &http_request };
+    const received = try http_runtime.runBoundedHttpOperation(
+        ReceivedHead,
+        alloc,
+        request.cancel_flag,
+        response_head_deadline(std.Io.Clock.Timestamp.now(io_mod.getIo(), .awake), request.deadline),
+        &receive_head,
+    );
+    var response = received.response;
     if (response.head.status != .ok) {
         const retry_after_seconds = retryAfterSeconds(response.head);
         var transfer: [16 * 1024]u8 = undefined;
@@ -802,8 +928,14 @@ pub fn streamPrepared(
 
     var transfer_buffer: [transfer_buffer_bytes]u8 = undefined;
     const reader = response.reader(&transfer_buffer);
+    var trailer_watch = UsageTrailerWatch{
+        .stream = http_request.connection.?.stream_writer.stream,
+        .cancel_flag = request.cancel_flag,
+        .outer_deadline = request.deadline,
+    };
+    defer trailer_watch.deinit();
     var events = request.events;
-    const completion = try consumeSse(
+    const completion = try consumeSseWithUsageTrailer(
         alloc,
         reader,
         &events,
@@ -813,12 +945,47 @@ pub fn streamPrepared(
         EventBridge.toolInput,
         request.cancel_flag,
         request.content_capture_limit,
+        if (modeForEndpoint(endpoint) == .openai_compatible)
+            .{ .context = &trailer_watch, .start_fn = UsageTrailerWatch.start }
+        else
+            null,
     );
     return .{ .completed = .{
         .completion = completion,
-        .usage = .{ .immediate = null },
+        .usage = usageOutcome(request.model, endpoint, completion),
         .ownership = .owned,
     } };
+}
+
+pub fn usageOutcome(
+    model: []const u8,
+    endpoint: []const u8,
+    completion: types.ModelCompletion,
+) stream_provider.UsageOutcome {
+    if (completion.usage.input_tokens == null or completion.usage.output_tokens == null) {
+        return .{ .unavailable = .possibly_billed };
+    }
+    var scope_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(endpoint, &scope_digest, .{});
+    return .{ .reported_tokens = .{
+        .model = model,
+        .scope_digest = scope_digest,
+        .observed_at_ms = @max(io_mod.milliTimestamp(), 0),
+    } };
+}
+
+test "direct reported usage requires both token totals and isolates endpoint identities" {
+    const missing = usageOutcome("model", "https://one.example/v1", .{});
+    try std.testing.expectEqual(stream_provider.UsageUnavailable.possibly_billed, missing.unavailable);
+    const partial = usageOutcome("model", "https://one.example/v1", .{ .usage = .{ .input_tokens = 3 } });
+    try std.testing.expectEqual(stream_provider.UsageUnavailable.possibly_billed, partial.unavailable);
+    const completion: types.ModelCompletion = .{ .usage = .{ .input_tokens = 3, .output_tokens = 2 } };
+    const first = usageOutcome("model", "https://one.example/v1", completion).reported_tokens;
+    const same = usageOutcome("model", "https://one.example/v1", completion).reported_tokens;
+    const other = usageOutcome("model", "https://two.example/v1", completion).reported_tokens;
+    try std.testing.expectEqualStrings("model", first.model);
+    try std.testing.expectEqualSlices(u8, &first.scope_digest, &same.scope_digest);
+    try std.testing.expect(!std.mem.eql(u8, &first.scope_digest, &other.scope_digest));
 }
 
 fn retryAfterSeconds(head: std.http.Client.Response.Head) ?u64 {
@@ -907,6 +1074,7 @@ test "Y2 request preserves the local coding-agent tool protocol" {
     try std.testing.expect(std.mem.find(u8, body, "tool output") != null);
     try std.testing.expect(std.mem.find(u8, body, "\"tool_call_id\":\"call_1\"") != null);
     try std.testing.expect(std.mem.find(u8, body, "max_tokens") == null);
+    try std.testing.expect(parsed.value.object.get("stream_options") == null);
     try std.testing.expect(std.mem.find(u8, body, "\"tools\":[{\"type\":\"function\"") != null);
 }
 
@@ -999,6 +1167,7 @@ test "OpenAI-compatible SSE reduces Y2 text and standard tool deltas" {
     const Capture = struct {
         content: std.ArrayList(u8) = .empty,
         saw_tool: bool = false,
+        trailer_starts: usize = 0,
 
         fn contentChunk(raw: *anyopaque, chunk: []const u8) void {
             const self: *@This() = @ptrCast(@alignCast(raw));
@@ -1009,10 +1178,15 @@ test "OpenAI-compatible SSE reduces Y2 text and standard tool deltas" {
             const self: *@This() = @ptrCast(@alignCast(raw));
             self.saw_tool = std.mem.eql(u8, id, "call_1") and std.mem.eql(u8, name, "read_file");
         }
+
+        fn startTrailer(raw: *anyopaque) !void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.trailer_starts += 1;
+        }
     };
     var capture: Capture = .{};
     defer capture.content.deinit(std.testing.allocator);
-    var completion = try consumeSse(
+    var completion = try consumeSseWithUsageTrailer(
         std.testing.allocator,
         &reader,
         &capture,
@@ -1022,15 +1196,55 @@ test "OpenAI-compatible SSE reduces Y2 text and standard tool deltas" {
         null,
         &cancelled,
         null,
+        .{ .context = &capture, .start_fn = Capture.startTrailer },
     );
     defer freeCompletion(std.testing.allocator, &completion);
 
     try std.testing.expectEqualStrings("hello", capture.content.items);
     try std.testing.expect(capture.saw_tool);
+    try std.testing.expectEqual(@as(usize, 0), capture.trailer_starts);
     try std.testing.expectEqual(types.ProviderFinishReason.tool_calls, completion.finish_reason.?);
     try std.testing.expectEqual(@as(?u64, 10), completion.usage.input_tokens);
     try std.testing.expectEqual(@as(usize, 1), completion.tool_calls.len);
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", completion.tool_calls[0].arguments_json);
+}
+
+test "OpenAI-compatible SSE records usage after the finishing choice" {
+    const sse_text =
+        "data: {\"id\":\"chat_usage\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}],\"usage\":null}\n\n" ++
+        "data: {\"id\":\"chat_usage\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n" ++
+        "data: {\"id\":\"chat_usage\",\"choices\":[],\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":4,\"total_tokens\":17}}\n\n" ++
+        "data: [DONE]\n\n";
+    var reader: std.Io.Reader = .fixed(sse_text);
+    var cancelled = std.atomic.Value(bool).init(false);
+    const Capture = struct {
+        fn contentChunk(_: *anyopaque, _: []const u8) void {}
+
+        fn startTrailer(raw: *anyopaque) !void {
+            const starts: *u8 = @ptrCast(@alignCast(raw));
+            starts.* += 1;
+        }
+    };
+    var capture: u8 = 0;
+    var completion = try consumeSseWithUsageTrailer(
+        std.testing.allocator,
+        &reader,
+        &capture,
+        Capture.contentChunk,
+        null,
+        null,
+        null,
+        &cancelled,
+        null,
+        .{ .context = &capture, .start_fn = Capture.startTrailer },
+    );
+    defer freeCompletion(std.testing.allocator, &completion);
+
+    try std.testing.expectEqualStrings("hello", completion.content.?);
+    try std.testing.expectEqual(types.ProviderFinishReason.stop, completion.finish_reason.?);
+    try std.testing.expectEqual(@as(?u64, 13), completion.usage.input_tokens);
+    try std.testing.expectEqual(@as(?u64, 4), completion.usage.output_tokens);
+    try std.testing.expectEqual(@as(u8, 1), capture);
 }
 
 test "OpenAI-compatible SSE rejects an out-of-range tool index" {
@@ -1054,6 +1268,96 @@ test "OpenAI-compatible SSE rejects an out-of-range tool index" {
         null,
         &cancelled,
         null,
+    ));
+}
+
+test "OpenAI-compatible SSE trailers preserve finished content and reported totals" {
+    const prefix = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"complete\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":13}}\n\n";
+    const Case = struct { trailer: []const u8, output_tokens: ?u64 };
+    const cases = [_]Case{
+        .{
+            .trailer = "data: {\"choices\":[{\"delta\":{\"content\":\"ignored\",\"tool_calls\":[{\"index\":0,\"id\":\"ignored\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":4}}\n\n",
+            .output_tokens = 4,
+        },
+        .{ .trailer = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0}}\n\ndata: [DONE]\n\n", .output_tokens = null },
+        .{ .trailer = "data: {\"choices\":[],\"usage\":{\"completion_tokens\":", .output_tokens = null },
+        .{ .trailer = "data: [DONE]\n\ndata: {\"usage\":{\"completion_tokens\":4}}\n\n", .output_tokens = null },
+        .{ .trailer = "", .output_tokens = null },
+    };
+    const Capture = struct {
+        fn contentChunk(raw: *anyopaque, chunk: []const u8) void {
+            const capture: *std.ArrayList(u8) = @ptrCast(@alignCast(raw));
+            capture.appendSlice(std.testing.allocator, chunk) catch unreachable;
+        }
+
+        fn startTrailer(_: *anyopaque) !void {}
+    };
+    for (cases) |case| {
+        const sse_text = try std.mem.concat(std.testing.allocator, u8, &.{ prefix, case.trailer });
+        defer std.testing.allocator.free(sse_text);
+        var reader: std.Io.Reader = .fixed(sse_text);
+        var cancelled = std.atomic.Value(bool).init(false);
+        var capture: std.ArrayList(u8) = .empty;
+        defer capture.deinit(std.testing.allocator);
+        var completion = try consumeSseWithUsageTrailer(
+            std.testing.allocator,
+            &reader,
+            &capture,
+            Capture.contentChunk,
+            null,
+            null,
+            null,
+            &cancelled,
+            null,
+            .{ .context = &capture, .start_fn = Capture.startTrailer },
+        );
+        defer freeCompletion(std.testing.allocator, &completion);
+
+        try std.testing.expectEqualStrings("complete", capture.items);
+        try std.testing.expectEqualStrings("complete", completion.content.?);
+        try std.testing.expectEqual(types.ProviderFinishReason.stop, completion.finish_reason.?);
+        try std.testing.expectEqual(@as(usize, 0), completion.tool_calls.len);
+        try std.testing.expectEqual(@as(?u64, 13), completion.usage.input_tokens);
+        try std.testing.expectEqual(case.output_tokens, completion.usage.output_tokens);
+    }
+}
+
+test "OpenAI-compatible SSE default host and Agent Y2 consumption stops at the finished choice" {
+    const sse_text =
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"complete\"},\"finish_reason\":\"stop\"}]}\n\n" ++
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":4}}\n\n";
+    var reader: std.Io.Reader = .fixed(sse_text);
+    var cancelled = std.atomic.Value(bool).init(false);
+    const Capture = struct {
+        fn contentChunk(_: *anyopaque, _: []const u8) void {}
+    };
+    var capture: u8 = 0;
+    var completion = try consumeSse(std.testing.allocator, &reader, &capture, Capture.contentChunk, null, null, null, &cancelled, null);
+    defer freeCompletion(std.testing.allocator, &completion);
+    try std.testing.expectEqualStrings("complete", completion.content.?);
+    try std.testing.expectEqual(@as(?u64, null), completion.usage.input_tokens);
+    try std.testing.expect(std.mem.find(u8, reader.buffered(), "prompt_tokens") != null);
+}
+
+test "OpenAI-compatible SSE rejects EOF before a completion event" {
+    var reader: std.Io.Reader = .fixed("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n");
+    var cancelled = std.atomic.Value(bool).init(false);
+    const Capture = struct {
+        fn contentChunk(_: *anyopaque, _: []const u8) void {}
+        fn startTrailer(_: *anyopaque) !void {}
+    };
+    var capture: u8 = 0;
+    try std.testing.expectError(error.OpenAIChatStreamIncomplete, consumeSseWithUsageTrailer(
+        std.testing.allocator,
+        &reader,
+        &capture,
+        Capture.contentChunk,
+        null,
+        null,
+        null,
+        &cancelled,
+        null,
+        .{ .context = &capture, .start_fn = Capture.startTrailer },
     ));
 }
 

@@ -238,7 +238,7 @@ pub const State = struct {
 pub fn isBareModelCommandAtCursor(editor: *const editor_state.State) bool {
     if (editor.cursor != editor.input.items.len) return false;
     const trimmed = std.mem.trimStart(u8, editor.input.items, " \t");
-    return std.ascii.eqlIgnoreCase(trimmed, "/model");
+    return std.ascii.eqlIgnoreCase(trimmed, "/model") or std.ascii.eqlIgnoreCase(trimmed, "/models");
 }
 
 pub fn filterCompletionLabels(query: []const u8, options: []const []const u8, out: [][]const u8) usize {

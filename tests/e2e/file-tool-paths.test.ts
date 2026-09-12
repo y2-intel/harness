@@ -962,7 +962,12 @@ describe("filesystem path handling", () => {
         }),
         (body) => {
           const resultOutput = toolResultOutput(body, "write_large_review");
-          expect(resultOutput).toContain('"reason":"review_caution"');
+          expect(JSON.parse(resultOutput).error).toMatchObject({
+            type: "tool_review_held",
+            reason: "review_caution",
+            held: true,
+            tool_name: "write_file",
+          });
           expect(resultOutput).toContain("Action held after safety review");
           return finalText("large reviewed write blocked");
         },

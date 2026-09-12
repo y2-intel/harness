@@ -110,4 +110,4 @@ if (!grid.includes("streamed response")) throw new Error(`terminal prompt did no
 if (requestedModel !== "sdk/accepted-model") throw new Error(`terminal prompt used unexpected accepted model: ${requestedModel}`);
 if (!(firstChunkAt >= startedAt)) throw new Error("terminal fetch did not produce a first stream chunk");
 
-console.log("headless xterm smoke passed: shared Y2 frame used the 96x30 host cell grid");
+console.log("headless xterm smoke passed: shared y2 frame used the 96x30 host cell grid");

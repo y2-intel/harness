@@ -254,7 +254,14 @@ pub const UsageUnavailable = enum {
 };
 
 pub const UsageOutcome = union(enum) {
-    immediate: ?DeferredUsageReference,
+    exact: model_provider.ProviderId,
+    reported_tokens: struct {
+        /// Borrows the request model through synchronous usage settlement.
+        model: []const u8,
+        /// Separates endpoint-local response identities without storing URLs or keys.
+        scope_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8,
+        observed_at_ms: i64,
+    },
     deferred: DeferredUsageReference,
     unavailable: UsageUnavailable,
 };
@@ -337,7 +344,7 @@ test "stream provider accepts one typed request and emits ordered neutral events
             request.events.emit(.{ .reasoning_delta = "second" });
             return .{ .completed = .{
                 .completion = .{ .content = "done" },
-                .usage = .{ .immediate = null },
+                .usage = .{ .exact = .gateway },
             } };
         }
     };
@@ -402,5 +409,5 @@ test "stream provider accepts one typed request and emits ordered neutral events
     try std.testing.expect(!capture.failed);
     try std.testing.expectEqualStrings("firstsecond", capture.chunks.items);
     try std.testing.expectEqualStrings("done", result.completed.completion.content.?);
-    try std.testing.expect(std.meta.activeTag(result.completed.usage) == .immediate);
+    try std.testing.expect(std.meta.activeTag(result.completed.usage) == .exact);
 }

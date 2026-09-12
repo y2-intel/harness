@@ -177,7 +177,7 @@ test("render-lab analyzer treats thinking token counters as activity rows", () =
   expect(failures).toContain("activity-footer-extra-blank");
 });
 
-test("render-lab analyzer recognizes the real Y2 prompt glyph", () => {
+test("render-lab analyzer recognizes the real y2 prompt glyph", () => {
   outDir = mkdtempSync(join(tmpdir(), "y2-render-lab-analyzer-test-"));
   const manifest = writeAnalyzerFixture(outDir, [
     "Run /help for commands",
