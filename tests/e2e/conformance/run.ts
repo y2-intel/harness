@@ -27,7 +27,7 @@ const baseline = resolve(packageRoot, "expected-failures.yml");
 const y2Bin = resolve(packageRoot, "../../../zig-out/bin/y2");
 if (!existsSync(y2Bin)) {
   throw new Error(
-    `missing freshly built Y2 binary at ${y2Bin}; run Y2_SOUND=0 zig build from the repository root`,
+    `missing freshly built y2 binary at ${y2Bin}; run Y2_SOUND=0 zig build from the repository root`,
   );
 }
 const resultRoot = mkdtempSync(join(tmpdir(), "y2-mcp-conformance-results-"));

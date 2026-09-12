@@ -533,7 +533,7 @@ function y2ProcessId(session: TmuxSession): number {
   }).trim().split("\n");
   const pid = findY2ProcessId(rows);
   if (pid !== undefined) return pid;
-  throw new Error(`Unable to find Y2 on ${tty}. Processes:\n${rows.join("\n")}`);
+  throw new Error(`Unable to find y2 on ${tty}. Processes:\n${rows.join("\n")}`);
 }
 
 function findY2ProcessId(rows: readonly string[]): number | undefined {
@@ -548,7 +548,7 @@ function findY2ProcessId(rows: readonly string[]): number | undefined {
   return undefined;
 }
 
-test("Y2 process discovery accepts basename and path process names", () => {
+test("y2 process discovery accepts basename and path process names", () => {
   expect(findY2ProcessId(["11361 y2"])).toBe(11361);
   expect(findY2ProcessId(["11362 /workspace/zig-out/bin/y2"])).toBe(11362);
 });

@@ -101,6 +101,8 @@ y2 auth
 
 `y2 auth` opens the [Y2 API Keys page](https://y2.dev/app/developers/api-keys), prints the URL as a fallback, and securely prompts for the key. `y2 setup` remains available as a direct key-entry alias.
 
+When an explicitly selected credential is unavailable, `y2 status` and `y2 doctor` identify that source and give source-specific recovery guidance without suggesting an unselected fallback.
+
 Run y2 from a project:
 
 ```bash
@@ -108,7 +110,7 @@ cd your_project
 y2
 ```
 
-The current directory becomes the primary workspace. Enter a prompt, or run `/help` to browse interactive commands.
+The current directory becomes the primary workspace. Enter a prompt, or run `/help` to browse interactive commands. While y2 is working, press Enter to queue a follow-up or Ctrl+Enter to steer the active turn at its next model boundary. If the turn has already closed, y2 safely queues the steering prompt as the next turn.
 
 The status line hides the workspace path and Git branch by default. Enable the `Status line workspace` option in `/settings`, run `/statusline workspace`, or set it in `~/.y2/settings.json`:
 
@@ -143,6 +145,10 @@ Repository instructions are discovered from applicable `AGENTS.md` files, with d
 scoping the directories beneath them. The same local agent loop supports skills, subagents, file
 creation and editing, and command execution under the active permission policy.
 
+Pass `--system "your instructions"` to replace the built-in base prompt for one request. Tool, skill, project, and runtime context still apply.
+
+With `--json`, `output` contains accumulated assistant Markdown across the request, while `final_output` contains only a completed final assistant response and is `""` for interrupted, failed, background, or otherwise absent final responses.
+
 Foreground terminal commands run with an explicit finite deadline. y2 uses durable terminal sessions for services, watchers, GUI applications, and other long-lived work, and keeps captured foreground output available through an opaque bounded-read handle for the active session or `--no-save` process.
 
 y2 starts in `auto` permission mode. Routine understood development actions run directly. Each unresolved action receives one narrow safety review based on the current user request and the exact pending action. A clear result authorizes only that action. A caution or unavailable review holds the action and returns advice to the agent without opening a permission prompt or ending the turn.
@@ -150,6 +156,10 @@ y2 starts in `auto` permission mode. Routine understood development actions run 
 JSON and quiet requests stay noninteractive by default. Add `--prompt-permissions` to allow configured approval prompts when stdin is a TTY. Automatic safety review never opens that prompt. Prompt text is written to stderr, so JSON stdout stays parseable and quiet stdout stays empty. Piped or redirected stdin remains noninteractive and fails instead of waiting for approval.
 
 Inside a saved session, `/permissions remember <allow|deny> <tool-name> <arguments-json>` stores an exact confirmed rule without running the action. `/permissions` lists stable rule IDs, and `/permissions revoke <rule-id>` removes a stored rule even when its original workspace or file state has changed.
+
+The `/model` picker accepts `/models` as a compatibility alias. Both open the same model and reasoning-effort picker; `y2 models` remains available for text and JSON catalog output.
+
+The local usage ledger includes token and request counts reported by Agent Y2, direct OpenAI-compatible endpoints, and subscription providers. When an endpoint does not report pricing, usage remains marked incomplete and spend includes only known costs.
 
 ## Embed y2
 
@@ -165,7 +175,11 @@ The WebAssembly SDK is experimental. See the [WebAssembly SDK](sdk/README.md).
 
 ## Extend y2
 
-Add reusable instructions with skills, connect external tools through MCP, or delegate independent work to subagents. Inside y2, `/mcp add <name> <command> [args...]` saves a local server and `/mcp add --transport http <name> <url>` saves a remote Streamable HTTP server. Project instruction files may link within their scope, and read-only workspace skill directories and their primary `SKILL.md` files may link within their owning workspace or home; managed skills, secondary resources, and escaping links remain no-follow. Skills installed via symlinks that resolve outside home or workspace are loaded when their resolved target is inside a directory listed in the `Y2_SKILL_SYMLINK_AUTHORITIES` environment variable. `y2 status` and `y2 doctor` report an invalid trusted MCP profile without starting its servers.
+Add reusable instructions with skills, connect external tools through MCP, or delegate independent work to subagents. Run `y2 mcp add NAME COMMAND [ARGS...]` for a local server or `y2 mcp add --transport http NAME URL` for Streamable HTTP without opening the interactive shell; the equivalent `/mcp add` forms remain available inside y2. A workspace may also provide Claude-compatible `.mcp.json` with a top-level `mcpServers` object. Pending project servers stay disconnected on every surface until they are approved with `/mcp trust approve <server>` or `y2 mcp trust approve <server>`. Interactive y2 presents the trust prompt after startup. `y2 ask` reports skipped pending servers on stderr, and ACP leaves them unavailable. Repository files cannot persist approval or expose environment-expanded values before approval. `/mcp trust reject <server>` rejects one and `/mcp trust reset` clears the workspace choices. Profile entries win same-name collisions. Profile `~/.y2/mcp.json` accepts `mcpServers` as an alias for `mcp`, while writes always use `mcp` and ambiguous server-like keys produce a visible warning. Project instruction files may link within their scope, and read-only workspace or compatibility skill directories and their primary `SKILL.md` files may link within their owning workspace or home; managed skills, secondary resources, and escaping links remain no-follow. Skills installed via symlinks that resolve outside home or workspace (e.g. Nix store paths) are loaded when their resolved target is inside a directory listed in the `Y2_SKILL_SYMLINK_AUTHORITIES` environment variable (colon-separated absolute paths). `y2 status` and `y2 doctor` report invalid or suspicious trusted MCP profiles without starting their servers.
+
+Use `y2 mcp list`, `y2 mcp path`, and `y2 mcp remove NAME` for noninteractive profile management. `y2 mcp trust approve|reject NAME`, `y2 mcp trust approve-all`, and `y2 mcp trust reset` manage workspace-scoped project trust. `y2 mcp auth NAME` and `y2 mcp logout NAME` run the existing remote credential lifecycle without opening the TUI or contacting a model endpoint.
+
+MCP servers have a 30-second startup timeout by default; set `startup_timeout_ms` on a server when its cold start needs a different bound. For direct `docker run` stdio entries, y2 uses a private container ID file to remove the owned container after shutdown or startup failure. A configuration that already supplies `--cidfile` keeps ownership of its own cleanup policy.
 
 ## Documentation
 

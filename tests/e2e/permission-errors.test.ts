@@ -55,7 +55,7 @@ function parseY2Json(result: { stdout: string; stderr: string; code: number | nu
   return JSON.parse(result.stdout.trim()) as Y2Json;
 }
 
-function toolResultText(body: string, toolCallId: string): string {
+function executionDeniedReason(body: string, toolCallId: string): string {
   const result = findOpenAiToolResult(body, toolCallId);
   expect(result).toBeDefined();
   expect(typeof result!.content).toBe("string");
@@ -198,12 +198,13 @@ describe("generic permission typed errors", () => {
           timeoutMs: TIMEOUT,
         });
         const json = parseY2Json(result);
+        expect(result.stderr).toBe('Running touch "./denied-marker.txt"\n');
         expect(json.tool_calls).toContainEqual({ name: "terminal", status: "error" });
         expect(existsSync(marker)).toBe(false);
         expect(gateway.requests).toHaveLength(2);
 
         const toolResult = JSON.parse(
-          toolResultText(gateway.requests[1]!.body, toolCallId),
+          executionDeniedReason(gateway.requests[1]!.body, toolCallId),
         ) as { error: PermissionEcho };
         const echo = toolResult.error;
         expect(echo.type).toBe("tool_permission_denied");

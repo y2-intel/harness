@@ -325,9 +325,9 @@ describe.skipIf(SKIP)("tui: extra slash commands", () => {
         /Tracking has not started/,
         5_000,
       );
-      expect(pane).toContain("Usage · 30 days");
+      expect(pane).toContain("[30 days]");
       expect(pane).not.toMatch(/^● Usage/m);
-      expect(pane).toContain("←→ Scope");
+      expect(pane).toContain("Tab Scope");
       expect(pane).toContain("R Refresh");
       expect(pane).toContain("Esc Close");
       await session.sendKeys("Escape");
@@ -337,7 +337,7 @@ describe.skipIf(SKIP)("tui: extra slash commands", () => {
         /Tracking has not started/,
         5_000,
       );
-      expect(aliasPane).toContain("Usage · 30 days");
+      expect(aliasPane).toContain("[30 days]");
     },
     TIMEOUT,
   );

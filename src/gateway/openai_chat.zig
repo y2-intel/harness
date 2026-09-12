@@ -137,6 +137,7 @@ pub fn buildRequest(
     }
 
     if (mode == .openai_compatible) {
+        try writer.writeAll(",\"stream_options\":{\"include_usage\":true}");
         if (request.max_output_tokens) |limit| {
             try writer.print(",\"max_tokens\":{d}", .{limit});
         }
@@ -816,9 +817,40 @@ pub fn streamPrepared(
     );
     return .{ .completed = .{
         .completion = completion,
-        .usage = .{ .immediate = null },
+        .usage = usageOutcome(request.model, endpoint, completion),
         .ownership = .owned,
     } };
+}
+
+pub fn usageOutcome(
+    model: []const u8,
+    endpoint: []const u8,
+    completion: types.ModelCompletion,
+) stream_provider.UsageOutcome {
+    if (completion.usage.input_tokens == null or completion.usage.output_tokens == null) {
+        return .{ .unavailable = .possibly_billed };
+    }
+    var scope_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(endpoint, &scope_digest, .{});
+    return .{ .reported_tokens = .{
+        .model = model,
+        .scope_digest = scope_digest,
+        .observed_at_ms = @max(io_mod.milliTimestamp(), 0),
+    } };
+}
+
+test "direct reported usage requires both token totals and isolates endpoint identities" {
+    const missing = usageOutcome("model", "https://one.example/v1", .{});
+    try std.testing.expectEqual(stream_provider.UsageUnavailable.possibly_billed, missing.unavailable);
+    const partial = usageOutcome("model", "https://one.example/v1", .{ .usage = .{ .input_tokens = 3 } });
+    try std.testing.expectEqual(stream_provider.UsageUnavailable.possibly_billed, partial.unavailable);
+    const completion: types.ModelCompletion = .{ .usage = .{ .input_tokens = 3, .output_tokens = 2 } };
+    const first = usageOutcome("model", "https://one.example/v1", completion).reported_tokens;
+    const same = usageOutcome("model", "https://one.example/v1", completion).reported_tokens;
+    const other = usageOutcome("model", "https://two.example/v1", completion).reported_tokens;
+    try std.testing.expectEqualStrings("model", first.model);
+    try std.testing.expectEqualSlices(u8, &first.scope_digest, &same.scope_digest);
+    try std.testing.expect(!std.mem.eql(u8, &first.scope_digest, &other.scope_digest));
 }
 
 fn retryAfterSeconds(head: std.http.Client.Response.Head) ?u64 {

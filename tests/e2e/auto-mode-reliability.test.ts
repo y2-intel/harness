@@ -1042,7 +1042,7 @@ describe("lean auto mode reliability", () => {
             if (index > 0) expect(body).toContain("review_caution");
             if (index === 3) {
               expect(body).not.toContain('"tools":[]');
-              expect(body).not.toContain('"toolChoice":{"type":"none"}');
+              expect(JSON.parse(body!).tool_choice).not.toBe("none");
             }
             return commandCall(command, `blocked_action_${index + 1}`);
           }),
@@ -1195,7 +1195,7 @@ describe("lean auto mode reliability", () => {
           ]),
           (body) => {
             expect(body).not.toContain('"tools":[]');
-            expect(body).not.toContain('"toolChoice":{"type":"none"}');
+            expect(JSON.parse(body!).tool_choice).not.toBe("none");
             return fakeGatewayFinalText("Mixed success recovery continued.");
           },
         ],

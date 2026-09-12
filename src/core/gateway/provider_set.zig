@@ -20,7 +20,6 @@ pub const Bundle = struct {
     pub const Capabilities = struct {
         y2_search: bool = false,
         vision_fallback: bool = false,
-        deferred_usage: bool = false,
     };
 
     capabilities: Capabilities = .{},
@@ -114,7 +113,7 @@ test "provider set selects each provider's complete route" {
     };
 
     const gateway = Bundle{
-        .capabilities = .{ .y2_search = true, .vision_fallback = true, .deferred_usage = true },
+        .capabilities = .{ .y2_search = true, .vision_fallback = true },
         .presentation = provider_catalog.find(.gateway),
         .auth_strategy = .api_key,
         .agent_stream = stream_provider.Provider{
@@ -149,12 +148,10 @@ test "provider set selects each provider's complete route" {
     try std.testing.expect(providers.select(.gateway).agent_stream.?.context.? == @as(*anyopaque, @ptrCast(&gateway_tag)));
     try std.testing.expect(providers.select(.gateway).capabilities.y2_search);
     try std.testing.expect(providers.select(.gateway).capabilities.vision_fallback);
-    try std.testing.expect(providers.select(.gateway).capabilities.deferred_usage);
     try std.testing.expect(providers.select(.gateway).deferred_usage != null);
     try std.testing.expectEqualStrings("y2", providers.select(.gateway).presentation.?.slug);
     try std.testing.expectEqual(Bundle.AuthStrategy.api_key, providers.select(.gateway).auth_strategy.?);
     try std.testing.expect(!providers.select(.codex).capabilities.y2_search);
-    try std.testing.expect(!providers.select(.codex).capabilities.deferred_usage);
     try std.testing.expect(providers.select(.codex).deferred_usage == null);
     try std.testing.expect(providers.select(.gateway).cli_model_catalog.?.context.? == @as(*anyopaque, @ptrCast(&gateway_tag)));
     try std.testing.expect(providers.select(.codex).model_catalog.?.context.? == @as(*anyopaque, @ptrCast(&codex_tag)));

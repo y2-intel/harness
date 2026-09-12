@@ -101,7 +101,7 @@ The object returned by `createY2Agent()` provides:
 | --- | --- |
 | `createSession()` | Creates a new active session |
 | `openSession(id)` | Loads a stored session |
-| `listSessions()` | Lists stored sessions |
+| `listSessions()` | Lists all stored sessions for the native workspace or the WebAssembly host store, following pagination internally |
 | `close()` | Closes the active session and shuts down cleanly |
 | `abort()` | Immediately aborts the runtime |
 | `exited` | Promise that resolves with the process exit code |

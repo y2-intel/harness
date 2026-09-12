@@ -95,14 +95,14 @@ jobs:
           esac
 
           cat > /tmp/system-prompt.txt <<'SYSPROMPT'
-          You write changelogs for Y2 Information Dominance, an open-source AI-powered CLI harness written in Zig.
+          You write changelogs for y2, an open-source AI-powered CLI harness written in Zig.
 
           You will receive the actual code diff since the last release, a diff stat summary, and a commit log. Treat the commit log as private research context.
 
           Rules:
           - Base your changelog ONLY on what the diff actually shows. Do not trust commit messages or PR descriptions as authoritative — they go stale. The diff is the source of truth.
           - Write public, user-facing product notes. Describe observable behavior and outcomes, not how the work was implemented or delivered.
-          - Spell the product name Y2 Information Dominance. Preserve y2 only for exact compatibility identifiers such as the y2 executable or Y2_MODEL.
+          - Spell the product name y2. Preserve different casing only for exact code identifiers such as Y2_MODEL.
           - Group changes under ### Breaking Changes, ### New Features, ### Improvements, ### Bug Fixes, and ### Security as appropriate. Omit empty sections.
           - Bold a short feature or fix name, then describe the user-visible change after a colon.
           - Do not include pull request or issue numbers, links to trackers, commit hashes, contributor names, author attribution, or a Contributors section.

@@ -85,7 +85,7 @@ export function analyzeRun(manifest: RenderLabManifest) {
     assertTuiObservabilityFrame(failures, frame, manifest);
 
     if (countLogoBlocks(frame.grid, logoRows) > 1) {
-      push(failures, "single-active-logo", frame, "more than one active Y2 logo block is visible");
+      push(failures, "single-active-logo", frame, "more than one active y2 logo block is visible");
     }
 
     if (footers.length > 1) {
@@ -93,7 +93,7 @@ export function analyzeRun(manifest: RenderLabManifest) {
     }
 
     if (expectsChrome && footers.length === 0 && !viewerFooterPresent) {
-      push(failures, "footer-missing", frame, "Y2-owned frame has no complete footer block");
+      push(failures, "footer-missing", frame, "y2-owned frame has no complete footer block");
     }
 
     if (input_rows.length > 1) {
@@ -101,7 +101,7 @@ export function analyzeRun(manifest: RenderLabManifest) {
     }
 
     if (expectsChrome && input_rows.length === 0 && !viewerFooterPresent) {
-      push(failures, "input-missing", frame, "Y2-owned frame has no footer input row");
+      push(failures, "input-missing", frame, "y2-owned frame has no footer input row");
     }
 
     assertActivitySpacing(failures, frame, footers[0]);
@@ -171,7 +171,7 @@ export function analyzeRun(manifest: RenderLabManifest) {
             failures,
             "shell-marker-in-y2-band",
             frame,
-            `shell marker ${marker} appears inside the Y2-owned viewport band`,
+            `shell marker ${marker} appears inside the y2-owned viewport band`,
           );
         }
       }

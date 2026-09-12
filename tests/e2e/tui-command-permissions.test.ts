@@ -4584,7 +4584,7 @@ describe("effect-aware command permissions", () => {
   );
 
   test.skipIf(!tmuxAvailable())(
-    "interactive Y2 advertises and executes the canonical subagent tool",
+    "interactive y2 advertises and executes the canonical subagent tool",
     async () => {
       const root = createIsolatedRoot();
       const stderrPath = join(root.root, "interactive-subagent-stderr.log");
@@ -4910,7 +4910,7 @@ describe("effect-aware command permissions", () => {
   );
 
   test.skipIf(!tmuxAvailable())(
-    "interactive Y2 delivers periodic child notifications at the next available parent step",
+    "interactive y2 delivers periodic child notifications at the next available parent step",
     async () => {
       const root = createIsolatedRoot();
       const stderrPath = join(root.root, "interactive-parent-delivery-stderr.log");
@@ -5063,7 +5063,7 @@ describe("effect-aware command permissions", () => {
   );
 
   test.skipIf(!tmuxAvailable())(
-    "interactive Y2 delivers a 64 KiB child message in five bounded projections",
+    "interactive y2 delivers a 64 KiB child message in five bounded projections",
     async () => {
       const root = createIsolatedRoot();
       const stderrPath = join(root.root, "interactive-64k-delivery-stderr.log");

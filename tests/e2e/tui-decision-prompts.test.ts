@@ -54,7 +54,7 @@ const MALFORMED_LABEL_SENTINEL = "Y2_MALFORMED_LABEL_SENTINEL";
 const MALFORMED_STREAMED_ARGUMENTS =
   `{"path":"${MALFORMED_LABEL_SENTINEL}",`;
 const LONG_QUESTION =
-  "When you ask Y2 to ask a question interactively, the question text must remain fully visible even when it wraps.";
+  "When you ask y2 to ask a question interactively, the question text must remain fully visible even when it wraps.";
 const LONG_QUESTION_ANSWER =
   "Run the complete verification suite before pushing this branch";
 const LONG_QUESTION_DESCRIPTION =
@@ -1029,7 +1029,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
   );
 
   test(
-    "flushes paced assistant text before an ask-user question and continues after its answer",
+    "publishes a complete assistant block before an ask-user question and continues after its answer",
     async () => {
       const preStart = "PRE_QUESTION_ASSISTANT_START";
       const preEnd = "PRE_QUESTION_ASSISTANT_END";
@@ -1099,7 +1099,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
 
       const activeScrollback = await waitForVisibleScrollback(
         ctx.session,
-        "paced assistant before question",
+        "complete assistant block before question",
         (scrollback) => {
           const end = scrollback.indexOf(preEnd);
           const question = scrollback.indexOf(
@@ -1109,12 +1109,14 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
           return end >= 0 && question > end;
         },
       );
+      const activeStart = activeScrollback.indexOf(preStart);
       const activeEnd = activeScrollback.indexOf(preEnd);
       const activeQuestion = activeScrollback.indexOf(
         visibleText(QUESTION_PROMPT),
         activeEnd + preEnd.length,
       );
-      expect(activeEnd).toBeGreaterThanOrEqual(0);
+      expect(activeStart).toBeGreaterThanOrEqual(0);
+      expect(activeEnd).toBeGreaterThan(activeStart);
       expect(activeQuestion).toBeGreaterThan(activeEnd);
       const activeGrid = await ctx.session.capturePaneGrid();
       expectBlankRowAboveQuestionPanel(activeGrid, QUESTION_PROMPT);
@@ -1123,7 +1125,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
       await ctx.session.resizeWindow(60, 12);
       await waitForQuestionPane(
         ctx.session,
-        "compact paced question",
+        "compact question after complete assistant block",
         (value) => value.includes(QUESTION_PROMPT),
       );
       const compactGrid = await ctx.session.capturePaneGrid();
@@ -1132,10 +1134,12 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
       await resolveQuestionWithSecondOption(ctx.session);
       await ctx.session.waitForText(postAnswer, TIMEOUT);
       const finalScrollback = visibleText(await ctx.session.captureFullScrollback());
+      const finalPreStart = finalScrollback.indexOf(preStart);
       const finalPreEnd = finalScrollback.indexOf(preEnd);
       const finalQuestion = finalScrollback.indexOf(visibleText(QUESTION_PROMPT));
       const finalPostAnswer = finalScrollback.indexOf(postAnswer);
-      expect(finalPreEnd).toBeGreaterThanOrEqual(0);
+      expect(finalPreStart).toBeGreaterThanOrEqual(0);
+      expect(finalPreEnd).toBeGreaterThan(finalPreStart);
       expect(finalQuestion).toBeGreaterThan(finalPreEnd);
       expect(finalPostAnswer).toBeGreaterThan(finalQuestion);
       expect(ctx.gateway.requests).toHaveLength(2);
@@ -2629,7 +2633,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
         .find((line) => line.includes("remain fully visible even when it wraps."));
       const questionLead = pane
         .split("\n")
-        .find((line) => line.includes("When you ask Y2 to ask a question"));
+        .find((line) => line.includes("When you ask y2 to ask a question"));
       const labelContinuation = pane
         .split("\n")
         .find((line) => line.includes("verification suite before"));
@@ -2643,7 +2647,7 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
         .split("\n")
         .find((line) => line.includes("Keep the entire explanation"));
       expect(questionContinuation?.indexOf("remain fully visible even when it wraps.")).toBe(
-        questionLead?.indexOf("When you ask Y2 to ask a question"),
+        questionLead?.indexOf("When you ask y2 to ask a question"),
       );
       expect(labelContinuation?.indexOf("verification suite before")).toBe(
         labelLead?.indexOf("Run the complete"),

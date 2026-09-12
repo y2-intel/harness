@@ -38,6 +38,11 @@ const NO_API_AUTH = {
 };
 const MISSING_AUTH_MESSAGE =
   "Y2 Information Dominance needs an API key. Run y2 auth or set Y2_API_KEY. For another OpenAI-compatible endpoint, set OPENAI_API_KEY and OPENAI_BASE_URL.";
+const MODERN_MCP_FIXTURE = join(
+  import.meta.dirname,
+  "fixtures",
+  "mcp-modern-stdio.mjs",
+);
 
 const KEYCHAIN_SERVICE = "Y2_API_KEY";
 
@@ -181,12 +186,13 @@ describe("cli: help", () => {
 Run one noninteractive request
 
 Usage:
-  y2 ask [--auto|--yolo] [--image PATH] [--json] [--quiet] [--prompt-permissions] [--no-save] [--no-color] [--resume <last|id>|--resume-id <id>] [--continue-recovery] [--] <prompt>
+  y2 ask [--auto|--yolo] [--image PATH] [--system TEXT] [--json] [--quiet] [--prompt-permissions] [--no-save] [--no-color] [--resume <last|id>|--resume-id <id>] [--continue-recovery] [--] <prompt>
 
 Options:
   --auto                Automatically review unresolved permission requests
   --yolo                Disable y2 permission checks
   --image PATH          Attach an image file; repeat for multiple images
+  --system TEXT         Replace the built-in system prompt for this request
   --json                Emit machine-readable JSON instead of text
   --quiet               Suppress assistant output
   --prompt-permissions  Prompt for Y/N permission approval when stdin is a TTY
@@ -199,7 +205,8 @@ Options:
 
 The prompt may be passed as arguments or piped on stdin when no prompt args are given.
 TTY stdout uses the Minimal transcript presentation; redirected stdout emits raw assistant Markdown.
-Operational progress and diagnostics are written to stderr. JSON output keeps raw Markdown in \`output\`.
+Operational progress and diagnostics are written to stderr. JSON \`output\` keeps accumulated assistant Markdown; \`final_output\` contains only the completed final response, or an empty string when absent.
+--system replaces only the built-in base prompt for this request; tool, skill, project, and runtime context still apply.
 With --prompt-permissions, JSON and quiet requests may prompt on stderr only when stdin is a TTY.
 `;
 
@@ -396,6 +403,28 @@ describe("cli: status", () => {
         expect(gateway.requestCount()).toBe(0);
         expect(snapshotTree(home)).toEqual(before);
 
+        writeFileSync(
+          join(y2Dir, "mcp.json"),
+          JSON.stringify({
+            "MCP-Servers": { fixture: { command: "node" } },
+          }) + "\n",
+          { mode: 0o600 },
+        );
+        const warningStatus = await runY2(["status", "--json"], { cwd, env });
+        const warningDoctor = await runY2(["doctor", "--json"], { cwd, env });
+        expect(JSON.parse(warningStatus.stdout)).toMatchObject({
+          mcp_config_warning: {
+            cause: "suspicious_server_key",
+            key: "MCP-Servers",
+            additional_matches: 0,
+          },
+        });
+        expect(
+          JSON.parse(warningDoctor.stdout).checks.find(
+            (check: { name: string }) => check.name === "mcp_config",
+          ),
+        ).toMatchObject({ status: "warn" });
+
         writeFileSync(join(y2Dir, "mcp.json"), '{"mcp":{}}\n', { mode: 0o600 });
         const validBefore = snapshotTree(home);
         const validStatus = await runY2(["status", "--json"], { cwd, env });
@@ -458,6 +487,54 @@ describe("cli: status", () => {
   );
 
 
+  for (const [source, help] of [
+    [
+      "api_key",
+      "An environment API key is selected but unavailable. Set Y2_API_KEY, or set OPENAI_API_KEY with OPENAI_BASE_URL before starting y2; no other credential was selected.",
+    ],
+    [
+      "stored_key",
+      "A stored Y2 API key is selected but unavailable. Run y2 auth to save one or choose another credential; no other credential was selected.",
+    ],
+  ] as const) {
+    test(
+      `status and doctor preserve unavailable explicit ${source} recovery`,
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), "y2-e2e-status-explicit-source-"));
+        try {
+          const y2Dir = join(root, ".y2");
+          mkdirSync(y2Dir, { recursive: true });
+          writeFileSync(
+            join(y2Dir, "settings.json"),
+            `${JSON.stringify({ provider: "gateway", credential_source: source })}\n`,
+          );
+          const env = {
+            ...NO_API_AUTH,
+            HOME: realpathSync(root),
+            Y2_DISABLE_KEYCHAIN: "1",
+          };
+
+          const status = await runY2(["status", "--json"], { env });
+          const doctor = await runY2(["doctor", "--json"], { env });
+
+          expect(status.code).toBe(0);
+          expect(doctor.code).toBe(0);
+          expect(JSON.parse(status.stdout.trim())).toMatchObject({
+            auth: "missing",
+            auth_help: help,
+          });
+          expect(JSON.parse(doctor.stdout.trim()).checks).toContainEqual({
+            name: "auth",
+            status: "fail",
+            detail: help,
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+      TIMEOUT,
+    );
+  }
   test(
     "status reports an active Y2 API key without exposing it",
     async () => {
@@ -2704,7 +2781,7 @@ describe("cli: ask success", () => {
       expect(jsonResult.code).toBe(1);
       expect(jsonResult.stderr).toBe("");
       expect(jsonResult.stdout).toBe(
-        '{"output":"","exit_code":1,"model":"","session_id":"","steps":0,"tool_calls":[],"error":"PromptResourceLimitExceeded"}\n',
+        '{"output":"","final_output":"","exit_code":1,"model":"","session_id":"","steps":0,"tool_calls":[],"error":"PromptResourceLimitExceeded"}\n',
       );
     },
     120_000,
@@ -3009,6 +3086,8 @@ describe("cli: ask success", () => {
       const json = JSON.parse(r.stdout.trim());
       expect(typeof json.output).toBe("string");
       expect(json.output.length).toBeGreaterThan(0);
+      expect(typeof json.final_output).toBe("string");
+      expect(json.final_output.length).toBeGreaterThan(0);
       expect(typeof json.model).toBe("string");
       expect(Array.isArray(json.tool_calls)).toBe(true);
       expect(typeof json.steps).toBe("number");
@@ -3064,9 +3143,11 @@ describe("cli: error handling", () => {
           },
         );
         expect(literal.code).toBe(0);
-        expect(JSON.parse(literal.stdout).output.trim()).toBe(
+        const literalJson = JSON.parse(literal.stdout);
+        expect(literalJson.output.trim()).toBe(
           "literal option prompt complete",
         );
+        expect(literalJson.final_output).toBe("literal option prompt complete");
         expect(gateway.requests).toHaveLength(1);
         expect(gateway.requests[0]!.body).toContain("--definitely-prompt-text");
       } finally {
@@ -3130,7 +3211,7 @@ describe("cli: error handling", () => {
             "y2 ask: --no-save cannot be used with --resume or --resume-id",
           );
           expect(rejected.stderr).toContain(
-            "usage: y2 ask [--auto|--yolo] [--image PATH] [--json] [--quiet] [--prompt-permissions] [--no-save]",
+            "usage: y2 ask [--auto|--yolo] [--image PATH] [--system TEXT] [--json] [--quiet] [--prompt-permissions] [--no-save]",
           );
         }
         expect(gateway.requests).toHaveLength(0);
@@ -3466,4 +3547,291 @@ describe("cli: workspace access", () => {
     },
     30_000,
   );
+});
+
+describe("cli: MCP profile add", () => {
+  test("status and doctor inspect MCP without transport while list --connect discovers it", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "y2-cli-mcp-inspect-")));
+    const home = join(root, "home");
+    const workspace = join(root, "workspace");
+    const pidPath = join(root, "mcp.pid");
+    mkdirSync(join(home, ".y2"), { recursive: true, mode: 0o700 });
+    mkdirSync(workspace);
+    writeFileSync(join(home, ".y2", "settings.json"), "{}\n", { mode: 0o600 });
+    writeFileSync(
+      join(home, ".y2", "mcp.json"),
+      JSON.stringify({
+        mcp: {
+          fixture: {
+            type: "local",
+            command: [process.execPath, MODERN_MCP_FIXTURE],
+            environment: { Y2_MCP_PID_PATH: pidPath },
+          },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const env = { HOME: home, ...NO_API_AUTH };
+    try {
+      const status = await runY2(["status", "--json"], { cwd: workspace, env });
+      expect(status.code).toBe(0);
+      expect(JSON.parse(status.stdout.trim()).mcp).toMatchObject({
+        connection_check: "not_checked",
+        servers: [{
+          name: "fixture",
+          source: "profile",
+          connection: "not_checked",
+          authentication: "not_checked",
+        }],
+      });
+      expect(existsSync(pidPath)).toBe(false);
+
+      const doctor = await runY2(["doctor", "--json"], { cwd: workspace, env });
+      expect(doctor.code).toBe(0);
+      expect(JSON.parse(doctor.stdout.trim()).mcp.connection_check).toBe(
+        "not_checked",
+      );
+      expect(existsSync(pidPath)).toBe(false);
+
+      const passive = await runY2(["mcp", "list"], { cwd: workspace, env });
+      expect(passive.code).toBe(0);
+      expect(passive.stdout).toContain("state=disconnected");
+      expect(existsSync(pidPath)).toBe(false);
+
+      const connected = await runY2(
+        ["mcp", "list", "--connect"],
+        { cwd: workspace, env, timeoutMs: TIMEOUT },
+      );
+      expect(connected.code).toBe(0);
+      expect(connected.stderr).toBe("");
+      expect(connected.stdout).toContain("state=ready");
+      expect(connected.stdout).toContain("tools=1");
+      expect(existsSync(pidPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("lists paths and removes profile servers without launching MCP transport", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "y2-cli-mcp-manage-")));
+    const home = join(root, "home");
+    const workspace = join(root, "workspace");
+    const profileMarker = join(root, "profile-launched");
+    const workspaceMarker = join(root, "workspace-launched");
+    mkdirSync(join(home, ".y2"), { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(home, ".y2", "settings.json"), JSON.stringify({}));
+    writeFileSync(
+      join(home, ".y2", "mcp.json"),
+      JSON.stringify({
+        mcp: {
+          shared: {
+            command: ["/bin/sh", "-c", `touch ${profileMarker}`],
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(workspace, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          shared: {
+            command: "/bin/sh",
+            args: ["-c", `touch ${workspaceMarker}`],
+          },
+          "workspace-only": {
+            command: "/bin/sh",
+            args: ["-c", `touch ${workspaceMarker}`],
+          },
+          broken: {
+            command: "${MISSING_LIST_COMMAND}",
+          },
+        },
+      }),
+    );
+    const env = { HOME: home, ...NO_API_AUTH };
+    try {
+      const path = await runY2(["mcp", "path"], { cwd: workspace, env });
+      expect(path.code).toBe(0);
+      expect(path.stderr).toBe("");
+      expect(path.stdout.trim()).toBe(join(home, ".y2", "mcp.json"));
+
+      const before = await runY2(["mcp", "list"], { cwd: workspace, env });
+      expect(before.code).toBe(0);
+      expect(before.stderr).toBe("");
+      expect(before.stdout).toMatch(/shared source=profile scope=profile/);
+      expect(before.stdout).toMatch(
+        /workspace-only source=workspace scope=workspace/,
+      );
+      expect(before.stdout).not.toMatch(/shared source=workspace scope=workspace/);
+      expect(before.stdout).not.toContain("MISSING_LIST_COMMAND");
+      expect(existsSync(profileMarker)).toBe(false);
+      expect(existsSync(workspaceMarker)).toBe(false);
+
+      const removed = await runY2(["mcp", "remove", "shared"], {
+        cwd: workspace,
+        env,
+      });
+      expect(removed.code).toBe(0);
+      expect(removed.stderr).toBe("");
+      expect(removed.stdout).toContain("Removed MCP server 'shared'");
+      expect(JSON.parse(readFileSync(join(home, ".y2", "mcp.json"), "utf8")))
+        .toEqual({ mcp: {} });
+
+      const after = await runY2(["mcp", "list"], { cwd: workspace, env });
+      expect(after.code).toBe(0);
+      expect(after.stdout).toMatch(/shared source=workspace scope=workspace/);
+      expect(existsSync(profileMarker)).toBe(false);
+      expect(existsSync(workspaceMarker)).toBe(false);
+
+      const missing = await runY2(["mcp", "remove", "missing"], {
+        cwd: workspace,
+        env,
+      });
+      expect(missing.code).not.toBe(0);
+      expect(missing.stderr).toContain("MCP server 'missing' was not found");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("adds local and HTTP servers without launching either server", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "y2-cli-mcp-add-")));
+    const home = join(root, "home");
+    const marker = join(root, "launched");
+    mkdirSync(home, { recursive: true });
+    try {
+      const help = await runY2(["mcp", "--help"], {
+        env: { HOME: home, ...NO_API_AUTH },
+      });
+      expect(help.code).toBe(0);
+      for (const command of [
+        "y2 mcp add NAME COMMAND [ARGS...]",
+        "y2 mcp auth NAME",
+        "y2 mcp list",
+        "y2 mcp logout NAME",
+        "y2 mcp path",
+        "y2 mcp remove NAME",
+        "y2 mcp trust approve|reject NAME",
+        "y2 mcp trust approve-all|reset",
+      ]) expect(help.stdout).toContain(command);
+
+      const local = await runY2(
+        ["mcp", "add", "local", "/bin/sh", "-c", `touch ${marker}`],
+        { env: { HOME: home, ...NO_API_AUTH } },
+      );
+      expect(local.code).toBe(0);
+      expect(local.stderr).toBe("");
+      expect(local.stdout).toContain("Saved MCP server 'local'");
+      expect(existsSync(marker)).toBe(false);
+
+      const remote = await runY2(
+        [
+          "mcp",
+          "add",
+          "--transport",
+          "http",
+          "remote",
+          "https://example.test/mcp",
+        ],
+        { env: { HOME: home, ...NO_API_AUTH } },
+      );
+      expect(remote.code).toBe(0);
+      expect(remote.stderr).toBe("");
+
+      const profile = JSON.parse(
+        readFileSync(join(home, ".y2", "mcp.json"), "utf8"),
+      );
+      expect(profile).not.toHaveProperty("mcpServers");
+      expect(profile.mcp.local.command).toEqual([
+        "/bin/sh",
+        "-c",
+        `touch ${marker}`,
+      ]);
+      expect(profile.mcp.remote).toMatchObject({
+        type: "http",
+        url: "https://example.test/mcp",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("canonicalizes alias input and refuses ambiguous server-like keys", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "y2-cli-mcp-alias-")));
+    const home = join(root, "home");
+    const y2Dir = join(home, ".y2");
+    mkdirSync(y2Dir, { recursive: true, mode: 0o700 });
+    const profilePath = join(y2Dir, "mcp.json");
+    try {
+      writeFileSync(
+        profilePath,
+        JSON.stringify({ mcpServers: { old: { command: "old-server" } } }),
+        { mode: 0o600 },
+      );
+      const migrated = await runY2(
+        ["mcp", "add", "new", "new-server"],
+        { env: { HOME: home, ...NO_API_AUTH } },
+      );
+      expect(migrated.code).toBe(0);
+      const canonical = JSON.parse(readFileSync(profilePath, "utf8"));
+      expect(Object.keys(canonical.mcp).sort()).toEqual(["new", "old"]);
+      expect(canonical).not.toHaveProperty("mcpServers");
+
+      const ambiguous = JSON.stringify({
+        mcp: { canonical: { command: "canonical-server" } },
+        "MCP-Servers": { blocked: { command: "blocked-server" } },
+        metadata: { owner: "team" },
+      });
+      writeFileSync(profilePath, ambiguous, { mode: 0o600 });
+      const refused = await runY2(
+        ["mcp", "add", "unsafe", "must-not-save"],
+        { env: { HOME: home, ...NO_API_AUTH } },
+      );
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain("McpConfigAmbiguousServerKey");
+      expect(readFileSync(profilePath, "utf8")).toBe(ambiguous);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("serializes concurrent different-name additions", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "y2-cli-mcp-race-")));
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    try {
+      const [first, second] = await Promise.all([
+        runY2(["mcp", "add", "first", "first-server"], {
+          env: { HOME: home, ...NO_API_AUTH },
+        }),
+        runY2(["mcp", "add", "second", "second-server"], {
+          env: { HOME: home, ...NO_API_AUTH },
+        }),
+      ]);
+      expect(first.code).toBe(0);
+      expect(second.code).toBe(0);
+      const profile = JSON.parse(
+        readFileSync(join(home, ".y2", "mcp.json"), "utf8"),
+      );
+      expect(Object.keys(profile.mcp).sort()).toEqual(["first", "second"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails precisely without HOME or valid add syntax", async () => {
+    const missingHome = await runY2(["mcp", "add", "fixture", "node"], {
+      env: { HOME: undefined, ...NO_API_AUTH },
+    });
+    expect(missingHome.code).not.toBe(0);
+    expect(missingHome.stderr).toContain("HomeNotSet");
+
+    const invalid = await runY2(
+      ["mcp", "add", "--transport", "sse", "fixture", "https://example.test"],
+      { env: { HOME: tmpdir(), ...NO_API_AUTH } },
+    );
+    expect(invalid.code).not.toBe(0);
+    expect(invalid.stderr).toContain("mcp add NAME COMMAND");
+  });
 });

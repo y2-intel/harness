@@ -11,6 +11,7 @@ import {
   liby2ApiVersion,
 } from "../node.js";
 import * as browser from "../browser.js";
+import { createY2Agent as createCoreAgent } from "../y2-sdk.js";
 
 assert.equal(liby2ApiVersion, 2);
 assert.equal(y2SdkApiVersion, 1);
@@ -120,4 +121,78 @@ await assert.rejects(
   "matching v2 low-level addon must reach createCore",
 );
 
-console.log("liby2 loader passed: browser exports, native preference, fallback diagnostics, and strict low-level API validation");
+
+async function listWithRuntimePages(pages, workspaceRoot) {
+  const requests = [];
+  const events = [];
+  let handler;
+  let finish;
+  let pageIndex = 0;
+  const exited = new Promise((resolve) => { finish = resolve; });
+  const runtime = {
+    exited,
+    setLineHandler(value) { handler = value; },
+    write(line) {
+      const message = JSON.parse(line);
+      const result = message.method === "session/list"
+        ? pages[pageIndex++]
+        : { protocolVersion: 1 };
+      if (message.method === "session/list") requests.push(message.params);
+      queueMicrotask(() => handler({ jsonrpc: "2.0", id: message.id, result }));
+    },
+    closeStdin() { finish(0); },
+    abort() { finish(0); },
+    abortHostEffects() {},
+  };
+  const coreAgent = await createCoreAgent({
+    ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+    runtimeFactory: async () => runtime,
+    onEvent(event) {
+      if (event.type === "acp.send" && event.message.method === "session/list") events.push(event);
+    },
+  });
+  return { agent: coreAgent, requests, events };
+}
+
+const firstPage = Array.from({ length: 100 }, (_, index) => ({ sessionId: `session-${index}` }));
+const lastSession = { sessionId: "session-100" };
+const paginated = await listWithRuntimePages([
+  { sessions: firstPage, nextCursor: "page-2" },
+  { sessions: [], nextCursor: "page-3" },
+  { sessions: [lastSession] },
+], "/workspace/sdk");
+try {
+  assert.deepEqual(await paginated.agent.listSessions(), [...firstPage, lastSession]);
+  assert.deepEqual(paginated.requests, [
+    { cwd: "/workspace/sdk" },
+    { cwd: "/workspace/sdk", cursor: "page-2" },
+    { cwd: "/workspace/sdk", cursor: "page-3" },
+  ]);
+  assert.deepEqual(
+    paginated.events.map((event) => event.message.params),
+    paginated.requests,
+    "later cursor requests must not mutate earlier acp.send events",
+  );
+} finally { await paginated.agent.close(); }
+
+const hostStore = await listWithRuntimePages([{ sessions: [lastSession] }]);
+try {
+  assert.deepEqual(await hostStore.agent.listSessions(), [lastSession]);
+  assert.deepEqual(hostStore.requests, [{}], "host-backed sessions retain an unscoped list request");
+} finally { await hostStore.agent.close(); }
+
+const repeatedCursor = await listWithRuntimePages([
+  { sessions: firstPage, nextCursor: "same-page" },
+  { sessions: [], nextCursor: "same-page" },
+]);
+try {
+  await assert.rejects(repeatedCursor.agent.listSessions(), /repeated session-list cursor/);
+  assert.equal(repeatedCursor.requests.length, 2, "a repeated cursor must stop pagination");
+} finally { await repeatedCursor.agent.close(); }
+
+const invalidCursor = await listWithRuntimePages([{ sessions: [], nextCursor: 4 }]);
+try {
+  await assert.rejects(invalidCursor.agent.listSessions(), /invalid session-list cursor/);
+} finally { await invalidCursor.agent.close(); }
+
+console.log("liby2 loader passed: browser exports, native preference, fallback diagnostics, strict low-level API validation, and compatible session pagination");

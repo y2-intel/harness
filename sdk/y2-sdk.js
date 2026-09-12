@@ -962,7 +962,24 @@ export async function createY2Agent(options) {
       return activeSession;
     },
     async listSessions() {
-      return (await request("session/list")).sessions || [];
+      const sessions = [];
+      const cursors = new Set();
+      let cursor;
+      for (;;) {
+        const params = {
+          ...(options.workspaceRoot === undefined ? {} : { cwd: options.workspaceRoot }),
+          ...(cursor === undefined ? {} : { cursor }),
+        };
+        const page = await request("session/list", params);
+        for (const session of page.sessions || []) sessions.push(session);
+        if (page.nextCursor == null) return sessions;
+        if (typeof page.nextCursor !== "string" || page.nextCursor.length === 0) {
+          throw new Error("y2 returned an invalid session-list cursor");
+        }
+        if (cursors.has(page.nextCursor)) throw new Error("y2 returned a repeated session-list cursor");
+        cursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
     },
     async openSession(id) {
       if (activeSession) await activeSession.close();

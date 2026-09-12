@@ -271,6 +271,7 @@ function createNativeCoreRuntime(addon, options) {
 function createNativeAgent(addon, options) {
   return createWasmAgent({
     ...options,
+    workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
     runtimeFactory(runtimeOptions) {
       return createNativeCoreRuntime(addon, runtimeOptions);
     },

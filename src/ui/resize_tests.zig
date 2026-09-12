@@ -9,6 +9,8 @@ const display_width = @import("../core/shared/display_width.zig");
 const diff_mod = @import("../core/output/diff.zig");
 const io_mod = @import("../core/shared/io.zig");
 const skill_runtime = @import("../core/skills/skill_runtime.zig");
+const usage_report = @import("../core/session/usage_report.zig");
+const workspace_access = @import("../core/workspace/workspace_access.zig");
 const types = @import("../core/shared/types.zig");
 const assistant_presentation = @import("../core/agent/assistant_presentation.zig");
 const builtin_commands = @import("../builtins/commands.zig");
@@ -995,6 +997,118 @@ fn expectGridContains(h: *Harness, needle: []const u8) !void {
     return error.TestExpectedGridText;
 }
 
+test "responsive compact menus stay inline across the VT width matrix" {
+    const alloc = std.testing.allocator;
+    var models: [25]usage_report.ModelUsage = undefined;
+    for (&models) |*model| {
+        model.* = .{
+            .model = @constCast("provider/model"),
+            .totals = .{
+                .total_tokens = 1,
+                .input_tokens = 1,
+                .output_tokens = 0,
+                .cache_read_tokens = 0,
+                .cache_write_tokens = 0,
+                .reasoning_tokens = null,
+                .request_count = 1,
+                .total_cost = 0.0001,
+            },
+        };
+    }
+    const usage_snapshot = usage_report.Snapshot{
+        .scope = .days_30,
+        .snapshot_time_ms = 100,
+        .window_start_ms = 0,
+        .coverage_started_at_ms = 0,
+        .coverage = .full,
+        .completeness = .complete,
+        .totals = .{
+            .total_tokens = 25,
+            .input_tokens = 25,
+            .output_tokens = 0,
+            .cache_read_tokens = 0,
+            .cache_write_tokens = 0,
+            .reasoning_tokens = null,
+            .request_count = 25,
+            .total_cost = 0.0025,
+        },
+        .models = &models,
+    };
+    var entries = [_]workspace_access.Entry{.{
+        .path = @constCast("/workspace/long-additional-directory"),
+        .saved = true,
+        .command_line = false,
+        .available = true,
+        .active = true,
+    }};
+
+    for ([_]u16{ 50, 80, 120, 180 }) |width| {
+        var h = try Harness.init(alloc, width, 36, 4);
+        defer h.deinit();
+        var input = InputRuntime{};
+        defer input.deinit(alloc);
+        var approval = approval_prompt.ApprovalPrompt{};
+        defer approval.deinit(alloc);
+        try h.shell.initViewport(&h.metrics, 1);
+        try h.shell.writeTranscript(
+            alloc,
+            &h.metrics,
+            "compact menu transcript remains visible\n",
+            true,
+        );
+
+        var ctx = defaultFooterContext(&input);
+        ctx.statusline_menu = .{
+            .active = true,
+            .selected_index = 2,
+            .snapshot = .{
+                .statusline_context = false,
+                .statusline_session = true,
+                .statusline_workspace = false,
+            },
+        };
+        try renderTestFooterWithContext(&h, &approval, &h.frame_redraw, ctx);
+        try h.flush();
+        try expectGridContains(&h, "compact menu transcript remains visible");
+        try expectGridContains(&h, "Status line");
+        try expectGridContains(&h, "Workspace");
+
+        ctx.statusline_menu = .{};
+        ctx.usage_menu = .{
+            .active = true,
+            .scope = .days_30,
+            .selected_model = models.len - 1,
+            .model_window_start = models.len - 1,
+            .snapshot = &usage_snapshot,
+        };
+        h.frame_redraw = true;
+        try renderTestFooterWithContext(&h, &approval, &h.frame_redraw, ctx);
+        try h.flush();
+        try expectGridContains(&h, "[30 days]");
+        try std.testing.expectEqual(
+            @as(usize, 20),
+            try countGridOccurrences(&h, "provider/model"),
+        );
+
+        ctx.usage_menu = .{};
+        ctx.workspace_menu = .{
+            .active = true,
+            .selected_row = 1,
+            .primary_directory = "/workspace",
+            .entries = &entries,
+        };
+        h.frame_redraw = true;
+        try renderTestFooterWithContext(&h, &approval, &h.frame_redraw, ctx);
+        try h.flush();
+        try expectGridContains(&h, "Workspace");
+        try expectGridContains(&h, "Additional directories");
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            try countGridOccurrences(&h, "provider/model"),
+        );
+    }
+}
+
 fn expectGridNotContains(h: *Harness, needle: []const u8) !void {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(h.alloc);
@@ -1575,6 +1689,130 @@ test "streamed markdown lists reflow through shrink and grow" {
     try expectRowPrefix(&h, nested_wide + 1, "      ");
 }
 
+test "streamed longer code fence keeps inner fences inside the block" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(
+        h.alloc,
+        "````md\n```zig\nconst inner = 1;\n```\n````\nafter the block\n",
+        &formatted,
+    );
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const open_row = try findRowContaining(&h, "```zig");
+    try expectRowPrefix(&h, open_row, "  │ ```zig");
+    try expectRowPrefix(&h, open_row + 1, "  │ const inner = 1;");
+    try expectRowPrefix(&h, open_row + 2, "  │ ```");
+    try expectRowPrefix(&h, open_row + 3, "  after the block");
+    try expectGridNotContains(&h, "````");
+
+    try h.driveResize(24, 40, 4, true);
+    const narrow_row = try findRowContaining(&h, "```zig");
+    try expectRowPrefix(&h, narrow_row, "  │ ```zig");
+    try expectRowPrefix(&h, narrow_row + 2, "  │ ```");
+    try expectGridNotContains(&h, "````");
+}
+
+test "streamed tab indented fence closes and releases the following prose" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "1. item\n\t```sh\n\tls\n\t```\n\tprose after\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const code_row = try findRowContaining(&h, "ls");
+    try expectRowPrefix(&h, code_row, "  │ ls");
+    const prose_row = try findRowContaining(&h, "prose after");
+    try std.testing.expect(prose_row > code_row);
+    const prose_cell = h.vt.cellAt(prose_row, 2) orelse return error.TestMissingCell;
+    try std.testing.expect(prose_cell.style.fg.eql(.default));
+    try expectGridNotContains(&h, "│ ```");
+    try expectGridNotContains(&h, "│ prose");
+}
+
+test "streamed plus and paren list markers wrap under their text" {
+    var h = try Harness.init(std.testing.allocator, 20, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(
+        h.alloc,
+        "+ plus-abcdefghijklmnopqrstuvwxyzabcdefghijklmnop\n" ++
+            "1) paren-abcdefghijklmnopqrstuvwxyzabcdefghijklmnop\n",
+        &formatted,
+    );
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const plus_row = try findRowContaining(&h, "plus-");
+    try expectRowPrefix(&h, plus_row, "  • plus-");
+    try expectRowPrefix(&h, plus_row + 1, "    ");
+    try expectGridNotContains(&h, "+ plus");
+
+    const paren_row = try findRowContaining(&h, "paren-");
+    try expectRowPrefix(&h, paren_row, "  1) paren-");
+    try expectRowPrefix(&h, paren_row + 1, "     ");
+
+    try h.driveResize(14, 40, 4, true);
+    const plus_narrow = try findRowContaining(&h, "plus-");
+    const paren_narrow = try findRowContaining(&h, "paren-");
+    try expectRowPrefix(&h, plus_narrow + 1, "    ");
+    try expectRowPrefix(&h, paren_narrow + 1, "     ");
+}
+
+test "streamed blockquote keeps heading and bullet styling inside the quote" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "> ## Quoted note\n> - quoted item\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const heading_row = try findRowContaining(&h, "Quoted note");
+    try expectRowPrefix(&h, heading_row, "  │ Quoted note");
+    const heading_cell = h.vt.cellAt(heading_row, 5) orelse return error.TestMissingHeadingCell;
+    try std.testing.expect(heading_cell.style.flags.bold);
+    try expectGridNotContains(&h, "## Quoted");
+
+    const item_row = try findRowContaining(&h, "quoted item");
+    try expectRowPrefix(&h, item_row, "  │ • quoted item");
+    try expectGridNotContains(&h, "- quoted");
+}
+
 test "streamed markdown definitions reflow through shrink and grow" {
     const Capture = struct {
         fn deliver(_: *anyopaque, _: *std.ArrayList(u8)) !void {}
@@ -1860,6 +2098,165 @@ test "streamed H1 keeps bold underline through shrink and grow" {
     const wide_cell = h.vt.cellAt(wide, 3) orelse return error.TestMissingHeadingCell;
     try std.testing.expect(wide_cell.style.flags.bold);
     try std.testing.expect(wide_cell.style.flags.underline);
+}
+
+test "streamed link with parenthesized destination keeps the full URL" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(
+        h.alloc,
+        "See [wiki](https://en.wikipedia.org/wiki/Foo_(bar) \"Foo\") tail\n",
+        &formatted,
+    );
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const row = try findRowContaining(&h, "wiki");
+    try expectRowTrimmedEquals(&h, row, "  See wiki tail");
+    const link_cell = h.vt.cellAt(row, 7) orelse return error.TestMissingLinkCell;
+    try std.testing.expect(link_cell.style.flags.underline);
+    try std.testing.expectEqualStrings(
+        "https://en.wikipedia.org/wiki/Foo_(bar)",
+        h.vt.hyperlinkUrl(link_cell.style.hyperlink_id) orelse return error.TestMissingHyperlink,
+    );
+    const tail_cell = h.vt.cellAt(row, 13) orelse return error.TestMissingTailCell;
+    try std.testing.expectEqual(@as(u32, 0), tail_cell.style.hyperlink_id);
+    try std.testing.expect(!tail_cell.style.flags.underline);
+}
+
+test "streamed double backtick span and entities render as plain characters" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "Use ``a ` b`` for &lt;x&gt; &amp; y\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const row = try findRowContaining(&h, "Use ");
+    try expectRowTrimmedEquals(&h, row, "  Use a ` b for <x> & y");
+    const code_cell = h.vt.cellAt(row, 7) orelse return error.TestMissingInlineCodeCell;
+    try std.testing.expect(code_cell.style.fg.eql(.{ .indexed = 245 }));
+    const inner_tick = h.vt.cellAt(row, 9) orelse return error.TestMissingInlineCodeCell;
+    try std.testing.expect(inner_tick.style.fg.eql(.{ .indexed = 245 }));
+    const prose_cell = h.vt.cellAt(row, 17) orelse return error.TestMissingProseCell;
+    try std.testing.expect(prose_cell.style.fg.eql(.default));
+    try expectGridNotContains(&h, "``");
+    try expectGridNotContains(&h, "&amp;");
+}
+
+test "streamed control character entity cannot erase transcript cells" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "keep x&#27;[2Ky and &#x9b;2J end\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const row = try findRowContaining(&h, "keep x");
+    try expectRowTrimmedEquals(&h, row, "  keep x&#27;[2Ky and &#x9b;2J end");
+}
+
+test "streamed unmatched emphasis markers stay literal and unstyled" {
+    var h = try Harness.init(std.testing.allocator, 40, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "*not a list item\n**bold** then **open tail\nrun `zig build\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const star_row = try findRowContaining(&h, "not a list");
+    try expectRowTrimmedEquals(&h, star_row, "  *not a list item");
+    const star_cell = h.vt.cellAt(star_row, 4) orelse return error.TestMissingCell;
+    try std.testing.expect(star_cell.codepoint == 'n' and !star_cell.style.flags.italic);
+
+    const bold_row = try findRowContaining(&h, "then");
+    try expectRowTrimmedEquals(&h, bold_row, "  bold then **open tail");
+    const bold_cell = h.vt.cellAt(bold_row, 3) orelse return error.TestMissingCell;
+    try std.testing.expect(bold_cell.codepoint == 'b' and bold_cell.style.flags.bold);
+    const open_cell = h.vt.cellAt(bold_row, 15) orelse return error.TestMissingCell;
+    try std.testing.expect(open_cell.codepoint == 'o' and !open_cell.style.flags.bold);
+
+    const code_row = try findRowContaining(&h, "zig build");
+    try expectRowTrimmedEquals(&h, code_row, "  run `zig build");
+    const code_cell = h.vt.cellAt(code_row, 8) orelse return error.TestMissingCell;
+    try std.testing.expect(code_cell.codepoint == 'z' and code_cell.style.fg.eql(.default));
+}
+
+test "streamed nested and mixed emphasis pairs resolve on the grid" {
+    var h = try Harness.init(std.testing.allocator, 60, 40, 4);
+    defer h.deinit();
+    try h.shell.initViewport(&h.metrics, 1);
+
+    var processor = assistant_presentation.MarkdownProcessor{};
+    defer processor.deinit(h.alloc);
+    var formatted: std.ArrayList(u8) = .empty;
+    defer formatted.deinit(h.alloc);
+    try processor.push(h.alloc, "See _a ``b`c`` d_ end\n***both*** and **** literal **x**\nSee *italic** plain\n", &formatted);
+    try processor.flush(h.alloc, &formatted);
+
+    _ = try h.shell.streamAssistantChunk(h.alloc, &h.metrics, formatted.items);
+    try h.renderTranscriptFrame();
+    try h.flush();
+
+    const under_row = try findRowContaining(&h, "See a");
+    try expectRowTrimmedEquals(&h, under_row, "  See a b`c d end");
+    const a_cell = h.vt.cellAt(under_row, 7) orelse return error.TestMissingCell;
+    try std.testing.expect(a_cell.codepoint == 'a' and a_cell.style.flags.italic);
+    const tick_cell = h.vt.cellAt(under_row, 10) orelse return error.TestMissingCell;
+    try std.testing.expect(tick_cell.codepoint == '`' and tick_cell.style.fg.eql(.{ .indexed = 245 }));
+    const d_cell = h.vt.cellAt(under_row, 13) orelse return error.TestMissingCell;
+    try std.testing.expect(d_cell.codepoint == 'd' and d_cell.style.flags.italic);
+    const end_cell = h.vt.cellAt(under_row, 15) orelse return error.TestMissingCell;
+    try std.testing.expect(end_cell.codepoint == 'e' and !end_cell.style.flags.italic);
+
+    const both_row = try findRowContaining(&h, "both and");
+    try expectRowTrimmedEquals(&h, both_row, "  both and **** literal x");
+    const both_cell = h.vt.cellAt(both_row, 3) orelse return error.TestMissingCell;
+    try std.testing.expect(both_cell.codepoint == 'b' and both_cell.style.flags.bold and both_cell.style.flags.italic);
+    const stars_cell = h.vt.cellAt(both_row, 12) orelse return error.TestMissingCell;
+    try std.testing.expect(stars_cell.codepoint == '*' and !stars_cell.style.flags.bold);
+    const x_cell = h.vt.cellAt(both_row, 25) orelse return error.TestMissingCell;
+    try std.testing.expect(x_cell.codepoint == 'x' and x_cell.style.flags.bold and !x_cell.style.flags.italic);
+
+    const plain_row = try findRowContaining(&h, "plain");
+    try expectRowTrimmedEquals(&h, plain_row, "  See italic* plain");
+    const italic_cell = h.vt.cellAt(plain_row, 7) orelse return error.TestMissingCell;
+    try std.testing.expect(italic_cell.codepoint == 'i' and italic_cell.style.flags.italic);
+    const plain_cell = h.vt.cellAt(plain_row, 15) orelse return error.TestMissingCell;
+    try std.testing.expect(plain_cell.codepoint == 'p' and !plain_cell.style.flags.italic);
 }
 
 test "streamed inline code color survives shrink and grow" {
@@ -2370,7 +2767,7 @@ test "thinking shimmer reserves assistant-gap rows and clears back to stable foo
     try std.testing.expectEqual(footer_idle, footer_after);
 }
 
-test "completed presentation tail keeps thinking slot until turn summary" {
+test "completed presentation tail keeps activity slot until turn summary" {
     var h = try Harness.init(std.testing.allocator, 80, 22, 4);
     defer h.deinit();
 
@@ -2405,11 +2802,9 @@ test "completed presentation tail keeps thinking slot until turn summary" {
     try h.flush();
 
     const assistant_row = try findRowContaining(&h, "assistant starts here");
-    const thinking_after_provider_finish = try findRowContaining(&h, "Thinking");
-    try std.testing.expect(thinking_after_provider_finish > thinking_row);
-    try expectExactlyOneBlankRowBetween(&h, assistant_row, thinking_after_provider_finish);
-    const footer_after_assistant = try findFirstDividerRowAfter(&h, thinking_after_provider_finish);
-    try expectExactlyOneBlankRowBetween(&h, thinking_after_provider_finish, footer_after_assistant);
+    try expectGridNotContains(&h, "Thinking");
+    const footer_after_assistant = try findFirstDividerRowAfter(&h, assistant_row);
+    try expectOnlyBlankRowsBetween(&h, assistant_row, footer_after_assistant);
 
     _ = try h.shell.appendTurnSummaryEntry(h.alloc, .{
         .thinking_duration_ms = 1_000,
@@ -3436,6 +3831,92 @@ test "closed tool group finality flows through fixed point resolution and sealin
     try std.testing.expect(released.history_visual_offset > held.history_visual_offset);
     try std.testing.expect(released.visual_offset >= released.history_visual_offset);
     try expectGridContains(&h, "SECOND_GROUP_INTRO");
+}
+
+test "completed tool group lets streamed assistant hard lines enter history" {
+    const alloc = std.testing.allocator;
+    var h = try Harness.init(alloc, 80, 14, 3);
+    defer h.deinit();
+
+    var input = InputRuntime{};
+    defer input.deinit(alloc);
+    var approval = approval_prompt.ApprovalPrompt{};
+    defer approval.deinit(alloc);
+
+    try h.shell.initViewport(&h.metrics, 8);
+    for (0..4) |index| {
+        var line: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&line, "startup row {d}\n", .{index});
+        _ = try h.shell.appendRawTranscriptEntry(alloc, text);
+    }
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+
+    const group = types.ToolPresentationGroupId{ .turn_id = 93, .anchor_step_id = 1 };
+    var call_ids: [18][20]u8 = undefined;
+    for (0..call_ids.len - 1) |index| {
+        const call_id = try std.fmt.bufPrint(
+            &call_ids[index],
+            "answer-a-{d:0>2}",
+            .{index},
+        );
+        try applyCompletedReadForGroupFinalityResizeTest(&h, 93, call_id, group);
+    }
+    const active_call_id = try std.fmt.bufPrint(
+        &call_ids[call_ids.len - 1],
+        "answer-a-{d:0>2}",
+        .{call_ids.len - 1},
+    );
+    const active_id = types.ToolLifecycleId{ .turn_id = 93, .call_id = active_call_id };
+    _ = try h.shell.applyToolLifecycle(alloc, .{ .authoritative_started = .{
+        .id = active_id,
+        .presentation_group_id = group,
+        .reconciles_provisional_call_id = null,
+        .tool_name = "read_file",
+        .activity_kind = .read,
+    } });
+    h.frame_redraw = true;
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+
+    var held_source = try h.shell.prepareTranscriptSource(alloc, null);
+    defer held_source.deinit(alloc);
+    const held = h.shell.stableTranscriptProjectionForFlow(held_source.bytes) orelse
+        return error.TestExpectedStableTranscript;
+    try std.testing.expect(held.visual_offset > held.history_visual_offset);
+
+    _ = try h.shell.streamAssistantChunk(
+        alloc,
+        &h.metrics,
+        "FINAL_LINE_01\nFINAL_LINE_02\nFINAL_LINE_03\npartial tail",
+    );
+    h.frame_redraw = true;
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+
+    try std.testing.expectEqual(@as(u16, 0), h.last_frame.planned_scroll_rows);
+    try std.testing.expectEqual(@as(u16, 0), h.last_frame.committed_scroll_rows);
+
+    _ = try h.shell.applyToolLifecycle(alloc, .{ .terminal = .{
+        .id = active_id,
+        .outcome = .{ .kind = .completed, .summary = "Read fixed-point fixture" },
+    } });
+    h.frame_redraw = true;
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+
+    try std.testing.expect(h.last_frame.planned_scroll_rows > 0);
+    try std.testing.expect(h.last_frame.committed_scroll_rows > 0);
+    try std.testing.expect(h.last_frame.document_append_bytes > 0);
+    try std.testing.expect(h.last_frame.transcript_history_floor_respected);
+    try std.testing.expectEqual(@as(u16, 0), h.last_frame.unplanned_scroll_rows);
+
+    var released_source = try h.shell.prepareTranscriptSource(alloc, null);
+    defer released_source.deinit(alloc);
+    const released = h.shell.stableTranscriptProjectionForFlow(released_source.bytes) orelse
+        return error.TestExpectedStableTranscript;
+    try std.testing.expect(released.history_visual_offset > held.visual_offset);
+    try expectGridContains(&h, "partial tail");
 }
 
 test "hidden auto approval lifecycle reposition adds no compact scroll rows" {
@@ -5686,7 +6167,7 @@ test "slash main page renders header categories selection range and contextual c
     try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
     try h.flush();
 
-    try expectGridContains(&h, "Commands 36 · Type to filter");
+    try expectGridContains(&h, "Commands 35 · Type to filter");
     try expectGridContains(&h, "1–6");
     try expectGridContains(&h, "/help");
     try expectGridContains(&h, "General");
@@ -5707,7 +6188,7 @@ test "slash main page renders header categories selection range and contextual c
 
     try expectGridContains(&h, "ask");
     try expectGridContains(&h, "test-model");
-    try expectGridNotContains(&h, "Commands 36");
+    try expectGridNotContains(&h, "Commands 35");
     try expectGridNotContains(&h, "↑↓ Navigate");
 }
 
@@ -5728,7 +6209,7 @@ test "slash main page drops categories and ellipsizes descriptions when narrow" 
     try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
     try h.flush();
 
-    try expectGridContains(&h, "Commands 2");
+    try expectGridContains(&h, "Commands 1");
     try expectGridContains(&h, "/model");
     try expectGridContains(&h, "…");
     try expectGridNotContains(&h, "Model");

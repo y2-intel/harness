@@ -13,6 +13,7 @@ export const CANONICAL_BUILTIN_NAMES = [
   "create_folder",
   "terminal",
   "subagent",
+  "capability_search",
   "skill",
   "install_skill",
   "mcp_search_tools",

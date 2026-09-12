@@ -275,10 +275,11 @@ function readConfigurationControl(path: string): ConfigurationControl {
 async function waitForConfigurationControl(
   path: string,
   predicate: (control: ConfigurationControl) => boolean,
+  timeoutMs: number = TIMEOUT,
 ): Promise<ConfigurationControl> {
   const startedAt = Date.now();
   let control = readConfigurationControl(path);
-  while (Date.now() - startedAt < TIMEOUT) {
+  while (Date.now() - startedAt < timeoutMs) {
     control = readConfigurationControl(path);
     if (predicate(control)) return control;
     await Bun.sleep(25);
@@ -1077,7 +1078,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
   );
 
   test(
-    "one Ctrl-C cancels a streaming persistent child without exiting Y2",
+    "one Ctrl-C cancels a streaming persistent child without exiting y2",
     async () => {
       const fixture = createFixture();
       const childName = "ctrl-c-child";
@@ -3563,7 +3564,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         const idleActions = await parent.waitForPane(
           (pane) =>
             pane.includes(`Actions — ${childName}`) &&
-            pane.includes("another Y2 process owns this child"),
+            pane.includes("another y2 process owns this child"),
           TIMEOUT,
         );
         expect(idleActions).not.toContain("C cancel");
@@ -3598,7 +3599,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await parent.sendKeys("Tab");
         await parent.sendLiteralText("x");
         const queuedActions = await parent.waitForText(
-          "another Y2 process owns this child",
+          "another y2 process owns this child",
           TIMEOUT,
         );
         expect(queuedActions).not.toContain("C cancel");
@@ -3630,7 +3631,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         const locallyOwnedChild = await parent.waitForPane(
           (pane) =>
             pane.includes(childName) &&
-            !pane.includes("another Y2 process owns this child") &&
+            !pane.includes("another y2 process owns this child") &&
             ((pane.includes(`Actions — ${childName}`) &&
               (pane.includes("Current state: idle") ||
                 pane.includes("Current state: interrupted"))) ||
@@ -3638,7 +3639,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
           TIMEOUT,
         );
         expect(locallyOwnedChild).not.toContain(
-          "another Y2 process owns this child",
+          "another y2 process owns this child",
         );
         expect(gateway.requests.filter((request) =>
           latestPrompt(request.body).includes(directMessage)
@@ -4291,7 +4292,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
   );
 
   test(
-    "persistent child executes models locally and configures the selected model",
+    "persistent child executes model browse locally and configures the selected model",
     async () => {
       const fixture = createFixture();
       const childName = "child-local-models";
@@ -4303,7 +4304,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
       });
       const gateway = startDynamicFakeGateway((body) =>
         fakeGatewayFinalText(
-          body.includes("/models")
+          body.includes("/model")
             ? "CHILD_MODELS_REACHED_MODEL"
             : "CHILD_LOCAL_MODELS_READY",
         ), {
@@ -4353,7 +4354,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await active.waitForText("CHILD_LOCAL_MODELS_READY", TIMEOUT);
 
         const requestCountBeforeModels = gateway.requestCount();
-        await active.sendText("/models");
+        await active.sendText("/model");
         await active.waitForText("Loading models", TIMEOUT);
         await active.sendKeys("C-x");
         const mainWhileModelsLoad = await active.waitForPane(
@@ -4370,12 +4371,12 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await active.waitForText("Agents & processes", TIMEOUT);
         await active.sendKeys("Enter");
         await active.waitForText("CHILD_LOCAL_MODELS_READY", TIMEOUT);
-        await active.sendText("/models");
+        await active.sendText("/model");
         const models = await active.waitForText(selectedModel, TIMEOUT);
         expect(models).toContain("Models 2");
         expect(gateway.requestCount()).toBe(requestCountBeforeModels);
         expect(
-          gateway.requests.some((request) => request.body.includes("/models")),
+          gateway.requests.some((request) => request.body.includes("/model")),
         ).toBe(false);
 
         await active.sendLiteralText("missing-child-model-filter");
@@ -4390,7 +4391,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
           TIMEOUT,
         );
         expect(escapedModels).not.toContain("Navigate     Tab Provider");
-        await active.sendText("/models");
+        await active.sendText("/model");
         await active.waitForText(selectedModel, TIMEOUT);
 
         await active.sendKeys("C-x");
@@ -4405,7 +4406,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await active.waitForText("Agents & processes", TIMEOUT);
         await active.sendKeys("Enter");
         await active.waitForText("CHILD_LOCAL_MODELS_READY", TIMEOUT);
-        await active.sendText("/models");
+        await active.sendText("/model");
         await active.waitForText(selectedModel, TIMEOUT);
         expect(gateway.requestCount()).toBe(requestCountBeforeModels);
 
@@ -4577,10 +4578,11 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
 
         const requestCountBeforeSkills = gateway.requestCount();
         await active.sendText("/skills");
-        await active.waitForPane(
+        const openedSkills = await active.waitForPane(
           (pane) => pane.includes("Skills 1") && pane.includes(skillName),
           TIMEOUT,
         );
+        expect(openedSkills).toContain("CHILD_LOCAL_SKILLS_READY");
         expect(gateway.requestCount()).toBe(requestCountBeforeSkills);
         expect(
           gateway.requests.some((request) =>
@@ -4766,6 +4768,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
   test(
     "configure duration derives its stop boundary and survives restart",
     async () => {
+      const controlTimeout = 45_000;
       const fixture = createFixture();
       const resumedStderrPath = join(root!, "duration-resumed.stderr");
       writeFileSync(resumedStderrPath, "");
@@ -4837,6 +4840,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
           (control) =>
             control.generation === initial.generation + 1 &&
             control.configuration.notifications.report_duration_ms === 900,
+          controlTimeout,
         );
         expect(withDuration.configuration.notifications).toMatchObject({
           report_interval_ms: 100,
@@ -4888,9 +4892,19 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await active.sendKeys("Tab");
         await active.sendKeys("Tab");
         await active.sendKeys("Tab");
+        await active.waitForPane(
+          (pane) =>
+            pane.split("\n").some((line) =>
+              line.startsWith("> Report duration ms: 900")
+            ),
+          TIMEOUT,
+        );
         await active.sendKeys("C-u");
-        const clearedForm = await active.waitForText(
-          "Duration sets the stop boundary; clear duration to disable.",
+        const clearedForm = await active.waitForPane(
+          (pane) =>
+            pane.split("\n").some((line) =>
+              line.startsWith("> Report duration ms:") && !line.includes("900")
+            ),
           TIMEOUT,
         );
         expect(clearedForm).not.toContain("Stop after duration:");
@@ -4902,6 +4916,7 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
           (control) =>
             control.generation === withDuration.generation + 1 &&
             control.configuration.notifications.report_duration_ms === null,
+          controlTimeout,
         );
         expect(withoutDuration.configuration.notifications).toMatchObject({
           report_interval_ms: 100,
