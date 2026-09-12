@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from scripts.pgso.model import (
     ArtifactEvidence,
     PgsoError,
+    require_app_version,
     sha256_file,
     size_gate,
 )
@@ -82,8 +83,11 @@ class ArtifactSpec:
     optimize: str = "ReleaseSafe"
     update_channel: str = "stable"
     selector: str = "y2"
+    app_version: str | None = None
 
     def __post_init__(self) -> None:
+        if self.app_version is not None:
+            require_app_version(self.app_version)
         if self.target != SUPPORTED_TARGET:
             raise PgsoError(f"unsupported artifact target: {self.target}")
         if self.optimize != "ReleaseSafe":
@@ -273,6 +277,8 @@ def zig_build_argv(
     prefix = paths.ir_prefix if emit_ir else paths.control_prefix
     cache = paths.ir_cache if emit_ir else paths.control_cache
     argv = [str(toolchain.zig), "build"]
+    if spec.app_version is not None:
+        argv.append(f"-Dapp-version={spec.app_version}")
     if emit_ir:
         argv.append("pgso-ir")
         argv.append(f"-Dpgso-artifact={spec.selector}")
@@ -920,11 +926,33 @@ def reject_profile_outputs(
         raise PgsoError(f"candidate created profile output: {names}")
 
 
+def read_app_version(
+    binary: pathlib.Path,
+    paths: PipelinePaths,
+    *,
+    expected: str | None = None,
+    log_name: str = "control-version.json",
+) -> str:
+    result = run_checked(
+        (str(binary), "--version"),
+        cwd=paths.root,
+        env=_runtime_environment(paths),
+        timeout_s=60,
+        log_path=paths.logs / log_name,
+        require_empty_stderr=True,
+    )
+    version = require_app_version(result.stdout.strip())
+    if expected is not None and version != expected:
+        raise PgsoError(f"app version mismatch: expected {expected}, got {version}")
+    return version
+
+
 def verify_candidate(
     toolchain: Toolchain,
     paths: PipelinePaths,
     *,
     expected_minos: str,
+    expected_app_version: str,
 ) -> CandidateEvidence:
     _require_nonempty_file(paths.candidate_binary, "candidate executable")
     run_checked(
@@ -997,8 +1025,11 @@ def verify_candidate(
         log_path=paths.logs / "candidate-version.json",
         require_empty_stderr=True,
     )
-    if not version_result.stdout.strip():
-        raise PgsoError("candidate version output is empty")
+    version_output = require_app_version(version_result.stdout.strip())
+    if version_output != expected_app_version:
+        raise PgsoError(
+            f"candidate app version mismatch: expected {expected_app_version}, got {version_output}"
+        )
     after = set(paths.candidate_profiles.glob("*.profraw"))
     reject_profile_outputs(before, after)
 
@@ -1006,5 +1037,5 @@ def verify_candidate(
         artifact=artifact,
         sha256=sha256_file(paths.candidate_binary),
         metadata=metadata,
-        version_output=version_result.stdout.strip(),
+        version_output=version_output,
     )

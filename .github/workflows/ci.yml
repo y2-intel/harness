@@ -38,6 +38,9 @@ jobs:
       - name: Audit public surface
         run: ./scripts/check-public-surface.sh
 
+      - name: Test release planning and delivery
+        run: python3 -m unittest scripts.tests.test_release scripts.tests.test_release_delivery -q
+
       - name: Build
         run: zig build -Doptimize=${{ matrix.optimize }}
 

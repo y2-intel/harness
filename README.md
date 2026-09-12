@@ -34,10 +34,10 @@ The initial macOS CLI archives are checksum-verified but are not Developer ID
 signed or Apple-notarized. Signing and notarization are planned for a later
 Apple release.
 
-For a reproducible install, pass an exact release:
+For a reproducible install, set `Y2_RELEASE_TAG` to a tag from the [published releases](https://github.com/y2-intel/harness/releases), then pass that exact tag:
 
 ```bash
-export PATH="$HOME/.y2/bin:$PATH" && curl -fsSL https://y2.dev/harness/install.sh | sh -s -- v0.0.7
+export PATH="$HOME/.y2/bin:$PATH" && curl -fsSL https://y2.dev/harness/install.sh | sh -s -- "$Y2_RELEASE_TAG"
 ```
 
 Or build from source:

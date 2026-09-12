@@ -11,6 +11,7 @@ from scripts.pgso.model import (
     bytes_to_mib,
     profile_evidence,
     require_empty_stderr,
+    require_app_version,
     sha256_file,
     size_gate,
     verify_identity,
@@ -28,6 +29,7 @@ class PgsoModelTests(unittest.TestCase):
             bitcode_sha256="b" * 64,
             corpus_sha256="c" * 64,
             update_channel="stable",
+            app_version="0.0.8",
             generation_flags=("--disable-vp",),
         )
 
@@ -49,6 +51,7 @@ class PgsoModelTests(unittest.TestCase):
             "bitcode_sha256": "e" * 64,
             "corpus_sha256": "f" * 64,
             "update_channel": "dev",
+            "app_version": "0.0.9",
             "generation_flags": ("--different",),
         }
 
@@ -63,6 +66,13 @@ class PgsoModelTests(unittest.TestCase):
                         expected,
                         dataclasses.replace(expected, **{field: value}),
                     )
+
+    def test_app_version_rejects_non_release_versions_and_overflow(self) -> None:
+        for version in ("0.0.0", "0.1.0", "4294967295.0.0"):
+            self.assertEqual(version, require_app_version(version))
+        for version in ("", "v0.1.0", "01.0.0", "1.2", "1.2.3.4", "1.2.3-dev", "1.2.3+meta", "4294967296.0.0"):
+            with self.subTest(version=version), self.assertRaises(PgsoError):
+                require_app_version(version)
 
     def test_sha256_file_hashes_the_exact_contents(self) -> None:
         with tempfile.TemporaryDirectory(prefix="y2-pgso-model-") as tmp:

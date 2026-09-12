@@ -406,17 +406,38 @@ Check in the golden file and wire a regression test that re-runs `y2 replay` in 
 
 ## Releases
 
-Releases are triggered automatically when the version in `src/main.zig` changes on `main`:
+Every push to `main` enters the serialized Release workflow. CI computes the next
+version from published Y2 releases on the first-parent history, with a patch bump
+by default. Add `#minor` or `#major` to a commit message carried into that history
+to request a larger bump; major takes precedence. For merged pull requests, put
+the marker in the merge commit message or PR title. Imported upstream tags do not
+set Y2's version. Rerunning a release reuses its original source SHA and tag.
 
-1. Edit `pub const version = "X.Y.Z";` in `src/main.zig`
-2. Merge to `main`
-3. The release workflow checks if `vX.Y.Z` tag exists; if not, it builds four platform binaries, creates the git tag, and publishes a GitHub Release with the binaries attached
+Do not edit a version literal or create a version-bump commit. CI passes the
+computed version through `-Dapp-version` to every release binary and SDK build.
+Local builds derive their version from the nearest strict SemVer tag on the
+first-parent history; a source archive without Git metadata defaults to `0.0.0`
+unless the build is given an explicit version.
 
-The hosted installer is published at `https://y2.dev/harness/install.sh` and
-downloads checksum-verified assets from `y2-intel/harness`. Until a matching
-GitHub Release and its artifacts exist, the installer reports that no release
-is available. The `y2 upgrade` command remains dormant until the Y2 release
-origin at `https://y2.dev/harness/releases` is published.
+Before publication, the exact source commit passes Full CI on all four supported
+native platforms, and the macOS arm64 candidate passes its size, behavior, and
+performance gates. CI creates the immutable tag, assembles a draft with all four
+archives and checksum sidecars, verifies them, and then publishes the release.
+If publication is interrupted, rerun the failed job to reuse its original
+artifacts. Existing uploaded bytes are immutable; a full rebuild that produces
+different bytes cannot replace them. Out-of-order attempts fail before creating
+a tag when a newer source commit has already been published.
+
+Add public product notes in a new `changes/<descriptive-name>.md` file with the
+supported changelog sections and named bullets below. CI collects only fragments
+added since the preceding release. Existing fragments are historical records;
+maintenance-only pushes may publish without new product notes. `CHANGELOG.md`
+retains the earlier release history.
+
+The hosted installer at `https://y2.dev/harness/install.sh` downloads verified
+assets from `y2-intel/harness`. Existing clients discover stable releases through
+`https://y2.dev/harness/releases/latest.txt`; that endpoint advertises a release
+only after its four archives and checksum sidecars are published.
 
 The initial CLI release publishes checksum-verified macOS archives without
 Developer ID signing or Apple notarization. Do not describe those archives as
@@ -433,22 +454,20 @@ Before enabling the first signed Apple release, configure the
   `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID`
 
 Configure and verify that environment, then restore the signing helper to both
-macOS release jobs before merging that version bump. The signing helper fails
+macOS release jobs before enabling signed publication. The signing helper fails
 closed when credentials are absent or invalid and verifies the Developer ID,
 team, identifier, notarization result, and ticket before packaging.
 
 After CI passes for a push to `main`, the dev release workflow builds retained
 GitHub Actions artifacts for all four supported platforms and the WebAssembly
 surface. It does not publish a hosted update channel, create tags, or create a
-GitHub Release. The `stable` and `dev` upgrade-channel settings remain dormant
-until the Y2 release origin is published.
+GitHub Release. The `dev` upgrade channel requires a separately published development manifest.
 
 Release notes are public product copy. Describe user-visible behavior, spell
-the product `Y2 Information Dominance`, retain `y2` only for exact compatibility
-identifiers, and omit contributor attribution, tracker references, repository
+the product `y2`, preserve exact code identifiers, and omit contributor attribution, tracker references, repository
 or website work, delivery infrastructure, CI and test details, branch history,
 and implementation-only refactors. Use commits and pull requests as research
-evidence only. Changelog formatting and release-marker rules live in
+evidence only. Changelog formatting rules live in
 `AGENTS.md`.
 
 Do not create tags manually. The workflow owns tag creation.

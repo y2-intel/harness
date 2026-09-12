@@ -1,6 +1,13 @@
 name: Full CI
 
 on:
+  workflow_call:
+    inputs:
+      app_version:
+        description: Computed stable release version
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
   push:
     branches-ignore:
@@ -33,6 +40,7 @@ jobs:
             runner: macos-15
         optimize: [ReleaseSafe]
     env:
+      APP_VERSION: ${{ inputs.app_version }}
       Y2_API_KEY: ""
       OPENAI_API_KEY: ""
       OPENAI_BASE_URL: ""
@@ -53,11 +61,22 @@ jobs:
       - name: Audit public surface
         run: ./scripts/check-public-surface.sh
 
+      - name: Test release planning and delivery
+        run: python3 -m unittest scripts.tests.test_release scripts.tests.test_release_delivery -q
+
       - name: Build
-        run: zig build -Doptimize=${{ matrix.optimize }}
+        shell: bash
+        run: |
+          version_args=()
+          if [ -n "$APP_VERSION" ]; then version_args+=("-Dapp-version=$APP_VERSION"); fi
+          zig build -Doptimize=${{ matrix.optimize }} "${version_args[@]}"
 
       - name: Run unit tests
-        run: zig build test -Doptimize=${{ matrix.optimize }}
+        shell: bash
+        run: |
+          version_args=()
+          if [ -n "$APP_VERSION" ]; then version_args+=("-Dapp-version=$APP_VERSION"); fi
+          zig build test -Doptimize=${{ matrix.optimize }} "${version_args[@]}"
 
       - name: Smoke test fresh binary
         shell: bash
@@ -117,6 +136,8 @@ jobs:
       Y2_API_CHAT_URL: ""
       Y2_MODEL: ""
       Y2_REQUIRE_TMUX: "1"
+      APP_VERSION: ${{ inputs.app_version }}
+      Y2_E2E_APP_VERSION: ${{ inputs.app_version }}
       SHARD_INDEX: ${{ matrix.shard.index }}
       SHARD_COUNT: ${{ matrix.shard.shard_count }}
     steps:
@@ -139,7 +160,11 @@ jobs:
             setup-zig-cache-v2-native-${{ matrix.platform.zig_tarball }}-0.16.0-full-ci-native-${{ matrix.platform.name }}-${{ matrix.optimize }}-
 
       - name: Build
-        run: zig build -Doptimize=${{ matrix.optimize }}
+        shell: bash
+        run: |
+          version_args=()
+          if [ -n "$APP_VERSION" ]; then version_args+=("-Dapp-version=$APP_VERSION"); fi
+          zig build -Doptimize=${{ matrix.optimize }} "${version_args[@]}"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -252,7 +277,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ matrix.name }}
         run: |
-          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")"
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --paginate --slurp)"
           jq -e --arg target "$TARGET" '
             ([
               "Native checks (ReleaseSafe, " + $target + ")",
@@ -261,7 +286,8 @@ jobs:
             ] | sort) as $expected
             |
             [
-              .jobs[]
+              .[].jobs[]
+              | .name = (.name | split(" / ") | last)
               | select(
                   (.name == ("Native checks (ReleaseSafe, " + $target + ")")) or
                   (.name | startswith("E2E (ReleaseSafe, " + $target + ", shard "))

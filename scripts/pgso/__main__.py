@@ -10,7 +10,7 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from scripts.pgso.corpus import load_corpus, run_behavior_corpus, run_corpus
-from scripts.pgso.model import BuildIdentity, PgsoError, profile_evidence, sha256_file
+from scripts.pgso.model import BuildIdentity, PgsoError, profile_evidence, require_app_version, sha256_file
 from scripts.pgso.pipeline import (
     GENERATION_FLAGS,
     ArtifactSpec,
@@ -21,6 +21,7 @@ from scripts.pgso.pipeline import (
     emit_bitcode,
     link_candidate,
     merge_profile_batch,
+    read_app_version,
     read_macos_minos,
     verify_candidate,
 )
@@ -85,6 +86,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--llvm-bin", required=True)
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     parser.add_argument("--target", default=SUPPORTED_TARGET)
+    parser.add_argument("--app-version", help="Pin strict X.Y.Z; otherwise resolve from the control build")
     parser.add_argument(
         "--update-channel",
         choices=("stable", "dev"),
@@ -129,6 +131,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     arguments = parser.parse_args(argv)
     if arguments.command == "report":
         return arguments
+    if arguments.app_version is not None:
+        try:
+            require_app_version(arguments.app_version)
+        except PgsoError as error:
+            parser.error(str(error))
     if arguments.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
     if arguments.command == "all" and arguments.samples < 50:
@@ -179,6 +186,7 @@ def _configuration(arguments: argparse.Namespace) -> dict[str, object]:
     return {
         "target": arguments.target,
         "update_channel": arguments.update_channel,
+        "app_version": arguments.app_version,
         "corpus": str(arguments.corpus.resolve()),
         "llvm_bin": str(pathlib.Path(arguments.llvm_bin).resolve()),
         "samples": arguments.samples,
@@ -317,10 +325,15 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             repo_root=REPO_ROOT,
             target=arguments.target,
             update_channel=arguments.update_channel,
+            app_version=arguments.app_version,
         )
         stage = "control"
         recorder.stage(stage, "running")
         control = build_control(toolchain, spec, paths)
+        app_version = read_app_version(control, paths, expected=arguments.app_version)
+        # Resolve once before emitting IR so tag metadata cannot change the
+        # version between control, seed, and distributed candidate builds.
+        spec = dataclasses.replace(spec, app_version=app_version)
         control_minos = read_macos_minos(
             toolchain,
             control,
@@ -336,6 +349,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
                     "sha256": control_sha256,
                     "size_bytes": control.stat().st_size,
                     "minimum_macos": control_minos,
+                    "app_version": app_version,
                 }
             },
         )
@@ -352,6 +366,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             bitcode_sha256=bitcode_sha256,
             corpus_sha256=corpus.manifest_sha256,
             update_channel=arguments.update_channel,
+            app_version=app_version,
             generation_flags=GENERATION_FLAGS,
         )
         recorder.stage(
@@ -401,6 +416,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             paths.merged_profile,
             toolchain=toolchain,
             bun=bun,
+            app_version=identity.app_version,
         )
         merged_raw_profiles += training_result.merged_raw_profiles
         profile_summary = _profile_summary(toolchain, paths)
@@ -425,6 +441,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             toolchain,
             REPO_ROOT,
             paths,
+            app_version=identity.app_version,
         )
         emit_bitcode(
             toolchain,
@@ -443,6 +460,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             toolchain,
             paths,
             expected_minos=control_minos,
+            expected_app_version=identity.app_version,
         )
         if not candidate.artifact.preferred_headroom_met:
             raise PgsoError(
@@ -498,6 +516,7 @@ def run_command(arguments: argparse.Namespace) -> pathlib.Path:
             paths.candidate_binary,
             paths.root / "candidate-behavior",
             bun=bun,
+            app_version=identity.app_version,
         )
         corpus_evidence = {
             "manifest_path": str(corpus.manifest_path),

@@ -40,7 +40,10 @@ pub fn build(b: *std.Build) void {
     ) orelse .none;
 
     const git_commit = readGitCommit(b);
-    const app_version = readAppVersion(b);
+    const app_version = if (b.option([]const u8, "app-version", "Application version (strict X.Y.Z); defaults to the latest first-parent release tag")) |override| blk: {
+        if (!isStrictAppVersion(override)) std.process.fatal("-Dapp-version must be strict X.Y.Z with u32 components", .{});
+        break :blk override;
+    } else readAppVersion(b);
     const update_channel = b.option(UpdateChannel, "update-channel", "Build update channel (stable or dev)") orelse .stable;
 
     const build_options = b.addOptions();
@@ -434,15 +437,64 @@ fn readGitCommit(b: *std.Build) []const u8 {
 }
 
 fn readAppVersion(b: *std.Build) []const u8 {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(b.graph.io, "src/main.zig", b.allocator, .limited(1024 * 1024)) catch
-        @panic("could not read src/main.zig to resolve app version");
-    defer b.allocator.free(bytes);
+    // Follow only this fork's first-parent history. Tags on merged upstream
+    // commits do not identify y2 releases. Source archives and shallow clones
+    // without a reachable release tag have the useful, explicit version 0.0.0.
+    var code: u8 = 0;
+    const out = b.runAllowFail(&.{
+        "git", "log", "--first-parent", "--decorate=full", "--decorate-refs=refs/tags/*", "--format=%D", "HEAD",
+    }, &code, .ignore) catch return "0.0.0";
+    if (code != 0) return "0.0.0";
+    return versionFromDecorations(out) orelse "0.0.0";
+}
 
-    const prefix = "pub const version = \"";
-    const start = (std.mem.find(u8, bytes, prefix) orelse
-        @panic("could not find pub const version in src/main.zig")) + prefix.len;
-    const end_rel = std.mem.findScalar(u8, bytes[start..], '"') orelse
-        @panic("could not parse pub const version in src/main.zig");
-    return b.allocator.dupe(u8, bytes[start .. start + end_rel]) catch
-        @panic("could not allocate app version");
+fn isStrictAppVersion(value: []const u8) bool {
+    if (value.len > 32) return false;
+    var parts = std.mem.splitScalar(u8, value, '.');
+    var count: usize = 0;
+    while (parts.next()) |part| {
+        if (part.len == 0 or (part.len > 1 and part[0] == '0')) return false;
+        for (part) |byte| if (!std.ascii.isDigit(byte)) return false;
+        _ = std.fmt.parseUnsigned(u32, part, 10) catch return false;
+        count += 1;
+    }
+    return count == 3;
+}
+
+fn versionFromDecorations(decorations: []const u8) ?[]const u8 {
+    var commits = std.mem.splitScalar(u8, decorations, '\n');
+    while (commits.next()) |commit| {
+        var newest: ?[]const u8 = null;
+        var refs = std.mem.splitScalar(u8, commit, ',');
+        while (refs.next()) |raw| {
+            const ref = std.mem.trim(u8, raw, " \t\r");
+            const prefix = "tag: refs/tags/v";
+            if (!std.mem.startsWith(u8, ref, prefix)) continue;
+            const candidate = ref[prefix.len..];
+            if (!isStrictAppVersion(candidate)) continue;
+            if (newest) |previous| {
+                const next = std.SemanticVersion.parse(candidate) catch unreachable;
+                const prior = std.SemanticVersion.parse(previous) catch unreachable;
+                if (next.order(prior) == .gt) newest = candidate;
+            } else newest = candidate;
+        }
+        if (newest) |version| return version;
+    }
+    return null;
+}
+
+test "app version accepts only strict upgrade-compatible numeric versions" {
+    for ([_][]const u8{ "0.0.0", "0.1.0", "12.34.56", "4294967295.0.0" }) |version| {
+        try std.testing.expect(isStrictAppVersion(version));
+    }
+    for ([_][]const u8{ "", "v0.1.0", "01.0.0", "1.2", "1.2.3.4", "1.2.3-dev", "1.2.3+build", "1.2.-3", "1.2.3\n", "4294967296.0.0" }) |version| {
+        try std.testing.expect(!isStrictAppVersion(version));
+    }
+}
+
+test "app version uses the nearest valid first-parent tag and highest same-commit version" {
+    try std.testing.expectEqualStrings("0.0.8", versionFromDecorations(
+        "\ntag: refs/tags/v9.0.0-dev, refs/heads/main\ntag: refs/tags/v0.0.7, tag: refs/tags/v0.0.8\ntag: refs/tags/v9.0.0\n",
+    ).?);
+    try std.testing.expect(versionFromDecorations("\ntag: refs/tags/v01.0.0\nrefs/tags/v2.0.0\n") == null);
 }

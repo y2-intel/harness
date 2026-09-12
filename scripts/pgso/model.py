@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import pathlib
+import re
 
 
 MIB = 1_048_576
@@ -10,6 +11,16 @@ MIB = 1_048_576
 
 class PgsoError(RuntimeError):
     pass
+
+
+def require_app_version(value: str) -> str:
+    if (
+        len(value) > 32
+        or re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value) is None
+        or any(int(part) > 0xFFFFFFFF for part in value.split("."))
+    ):
+        raise PgsoError("app version must be strict X.Y.Z with u32 components")
+    return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -22,6 +33,7 @@ class BuildIdentity:
     bitcode_sha256: str
     corpus_sha256: str
     update_channel: str
+    app_version: str
     generation_flags: tuple[str, ...]
 
 

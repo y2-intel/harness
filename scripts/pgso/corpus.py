@@ -680,6 +680,7 @@ def run_corpus(
     *,
     toolchain: object,
     bun: pathlib.Path | str = "bun",
+    app_version: str | None = None,
     command_runner: Callable[..., CommandResult] = run_checked,
     profile_merger: Callable[..., int] = merge_profile_batch,
 ) -> CorpusResult:
@@ -689,6 +690,8 @@ def run_corpus(
     runtime_home = profile_dir.parent / "home"
     runtime_home.mkdir(parents=True, exist_ok=True)
     def prepare(scenario: Scenario, environment: dict[str, str]) -> object:
+        if app_version is not None:
+            environment["Y2_E2E_APP_VERSION"] = app_version
         environment["LLVM_PROFILE_FILE"] = str(
             profile_dir / f"{scenario.name}-%m-%p-%c.profraw"
         )
@@ -739,6 +742,7 @@ def run_behavior_corpus(
     output_dir: pathlib.Path,
     *,
     bun: pathlib.Path | str = "bun",
+    app_version: str | None = None,
     command_runner: Callable[..., CommandResult] = run_checked,
 ) -> CorpusResult:
     log_dir = output_dir / "logs"
@@ -748,6 +752,8 @@ def run_behavior_corpus(
     runtime_home = output_dir / "home"
     runtime_home.mkdir(parents=True, exist_ok=True)
     def prepare(scenario: Scenario, environment: dict[str, str]) -> object:
+        if app_version is not None:
+            environment["Y2_E2E_APP_VERSION"] = app_version
         trace_path = trace_dir / f"{scenario.name}.log"
         trace_path.unlink(missing_ok=True)
         environment["Y2_TRACE_LOG"] = str(trace_path)

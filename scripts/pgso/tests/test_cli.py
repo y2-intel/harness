@@ -43,11 +43,19 @@ class PgsoCliTests(unittest.TestCase):
         self.assertEqual("all", arguments.command)
         self.assertEqual("aarch64-macos", arguments.target)
         self.assertEqual("stable", arguments.update_channel)
+        self.assertIsNone(arguments.app_version)
         self.assertEqual(50, arguments.samples)
         self.assertGreater(arguments.timeout_seconds, 0)
         self.assertTrue(str(arguments.corpus).endswith("scripts/pgso/corpus.json"))
         self.assertEqual("bun", arguments.bun)
         self.assertEqual("hyperfine", arguments.hyperfine)
+
+    def test_explicit_version_is_validated_before_building(self) -> None:
+        arguments = parse_args([*self.required_arguments(), "--app-version", "0.0.8"])
+        self.assertEqual("0.0.8", arguments.app_version)
+        for invalid in ("", "v0.0.8", "00.0.8", "0.0.8-dev"):
+            with self.subTest(version=invalid), self.assertRaises(SystemExit):
+                parse_args([*self.required_arguments(), "--app-version", invalid])
 
     def test_every_mutating_command_requires_toolchain_and_output(self) -> None:
         for command in ("build", "train", "all"):
