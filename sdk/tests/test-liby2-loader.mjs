@@ -57,11 +57,19 @@ const terminal = await createY2Terminal({ nativeAddon: nativeUrl, marker: 2 });
 assert.equal(terminal.backend, "native-terminal");
 assert.equal(terminal.options.marker, 2);
 
-await assert.rejects(
-  createY2Agent({ nativeAddon: nativeUrl, backend: "wasm" }),
-  (error) => error?.code === "LIBY2_JSPI_REQUIRED" &&
-    error.message.includes("--experimental-wasm-jspi"),
-);
+// Exercise the unsupported-runtime diagnostic even when Node enables JSPI by default.
+const suspendingDescriptor = Object.getOwnPropertyDescriptor(WebAssembly, "Suspending");
+try {
+  Object.defineProperty(WebAssembly, "Suspending", { configurable: true, value: undefined });
+  await assert.rejects(
+    createY2Agent({ nativeAddon: nativeUrl, backend: "wasm" }),
+    (error) => error?.code === "LIBY2_JSPI_REQUIRED" &&
+      error.message.includes("--experimental-wasm-jspi"),
+  );
+} finally {
+  if (suspendingDescriptor) Object.defineProperty(WebAssembly, "Suspending", suspendingDescriptor);
+  else delete WebAssembly.Suspending;
+}
 
 const coreOnlyPath = resolve(dir, "core-only.mjs");
 await writeFile(coreOnlyPath, `
