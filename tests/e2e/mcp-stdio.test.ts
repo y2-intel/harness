@@ -16,6 +16,7 @@ import { contentText } from "./conditional-guidance-oracle";
 import {
   fakeGatewayFinalText,
   fakeGatewayToolCall,
+  hasEmptyComposer,
   startDynamicFakeGateway,
   startFakeGateway,
   TmuxSession,
@@ -860,32 +861,70 @@ exec "$Y2_MCP_FIXTURE_RUNTIME" "$Y2_MCP_FIXTURE_PATH"
         env: fixtureEnv(root, gateway),
       });
 
+      const reloadNotice = "MCP configuration reloaded successfully";
+      const promptNotice = "Project MCP server 'fixture' is defined in .mcp.json";
+      const outputAfterReload = (pane: string, actionNotice: string) => {
+        const actionIndex = pane.lastIndexOf(actionNotice);
+        if (actionIndex < 0) return null;
+        const reloadIndex = pane.indexOf(
+          reloadNotice,
+          actionIndex + actionNotice.length,
+        );
+        return reloadIndex < 0 ? null : pane.slice(reloadIndex + reloadNotice.length);
+      };
+      const resetPromptReady = (pane: string) => {
+        const afterReload = outputAfterReload(
+          pane,
+          "Resetting project MCP choices for this workspace.",
+        );
+        return afterReload !== null &&
+          afterReload.includes(promptNotice) &&
+          afterReload.includes("[Esc] Dismiss remaining prompts") &&
+          hasEmptyComposer(pane);
+      };
+
       await tui.waitForComposer(15_000);
-      await tui.waitForText("Project MCP server 'fixture' is defined in .mcp.json", 10_000);
+      await tui.waitForText(promptNotice, 10_000);
       expect(existsSync(root.launchLogPath)).toBe(false);
 
       await tui.sendLiteral("1");
-      await Bun.sleep(250);
+      await tui.waitForPane(
+        (pane) =>
+          outputAfterReload(pane, "Approving project MCP server 'fixture'.") !== null,
+        15_000,
+      );
       expect(readFileSync(root.traceLogPath, "utf8")).toContain(
         "project prompt input byte=49 owns_input=true",
       );
-      await tui.waitForText("MCP configuration reloaded successfully", 15_000);
       await tui.sendText("/mcp list");
       let pane = await tui.waitForText("admission=approved", 10_000);
       expect(pane).toContain("state=ready");
       expect(readFileSync(join(root.home, ".y2", "settings.json"), "utf8"))
         .toContain("enabledMcpjsonServers");
 
+      // The prior reload and prompt remain visible. Require reset's own output
+      // before sending the next trust-choice key.
+      expect(pane).toContain(reloadNotice);
+      expect(pane).toContain(promptNotice);
+      expect(resetPromptReady(pane)).toBe(false);
       await tui.sendText("/mcp trust reset");
-      await tui.waitForText("MCP configuration reloaded successfully", 15_000);
-      await tui.waitForText("Project MCP server 'fixture' is defined in .mcp.json", 10_000);
+      await tui.waitForPane(resetPromptReady, 15_000);
       await tui.sendLiteral("3");
-      await tui.waitForText("MCP configuration reloaded successfully", 15_000);
+      await tui.waitForPane(
+        (pane) =>
+          outputAfterReload(pane, "Rejecting project MCP server 'fixture'.") !== null,
+        15_000,
+      );
+      expect(readFileSync(root.traceLogPath, "utf8")).toContain(
+        "project prompt input byte=51 owns_input=true",
+      );
       await tui.sendText("/mcp list");
       pane = await tui.waitForText("admission=rejected", 10_000);
       expect(pane).toContain("state=disabled");
       expect(readFileSync(join(root.home, ".y2", "settings.json"), "utf8"))
         .toContain("disabledMcpjsonServers");
+      expect(gateway.requestCount()).toBe(0);
+      await expectFixtureProcessesExited(readWire(root.wireLogPath));
 
       await tui.kill();
       tui = null;
