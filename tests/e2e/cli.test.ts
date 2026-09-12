@@ -489,6 +489,8 @@ describe("cli: status", () => {
 
           expect(status.code).toBe(0);
           expect(doctor.code).toBe(0);
+          expect(status.stderr).toBe("");
+          expect(doctor.stderr).toBe("");
           expect(JSON.parse(status.stdout.trim())).toMatchObject({
             auth: "missing",
             auth_help: help,
@@ -498,6 +500,13 @@ describe("cli: status", () => {
             status: "fail",
             detail: help,
           });
+
+          for (const command of ["status", "doctor"]) {
+            const text = await runY2([command], { env });
+            expect(text.code).toBe(0);
+            expect(text.stderr).toBe("");
+            expect(text.stdout).toContain(help);
+          }
         } finally {
           rmSync(root, { recursive: true, force: true });
         }
