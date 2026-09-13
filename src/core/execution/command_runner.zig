@@ -4245,19 +4245,47 @@ test "timeout terminates environment-sanitized double-fork descendants" {
         .timeout_ms = 2000,
     }, alloc, command, workspace));
 
-    const pid_text = try readAbsoluteFile(alloc, pid_path, 4096);
+    const pid_text = readAbsoluteFile(alloc, pid_path, 4096) catch |err| {
+        std.debug.print("sanitized double-fork fixture PID file: {s}\n", .{@errorName(err)});
+        return err;
+    };
     defer alloc.free(pid_text);
     var pids: std.ArrayList(std.posix.pid_t) = .empty;
     defer pids.deinit(alloc);
     var lines = std.mem.tokenizeAny(u8, pid_text, " \t\r\n");
     while (lines.next()) |line| {
-        try pids.append(alloc, try std.fmt.parseInt(std.posix.pid_t, line, 10));
+        const pid = std.fmt.parseInt(std.posix.pid_t, line, 10) catch |err| {
+            std.debug.print("sanitized double-fork fixture invalid PID record after {d} descendants: {s}\n", .{ pids.items.len, @errorName(err) });
+            return err;
+        };
+        try pids.append(alloc, pid);
     }
     defer for (pids.items) |pid| {
         std.posix.kill(pid, std.posix.SIG.KILL) catch {};
     };
     try std.testing.expectEqual(@as(usize, 16), pids.items.len);
-    for (pids.items) |pid| try expectProcessGone(pid);
+    for (pids.items) |pid| expectProcessGone(pid) catch |err| {
+        std.debug.print("sanitized double-fork fixture started all {d} descendants; PID {d} cleanup: {s}\n", .{ pids.items.len, pid, @errorName(err) });
+        return err;
+    };
+}
+
+fn reportProcessStillPresentForTest(alloc: Allocator, pid: std.posix.pid_t) void {
+    std.debug.print("PID {d} still present after 1000ms; inspecting before emergency cleanup\n", .{pid});
+    var pid_buf: [32]u8 = undefined;
+    const pid_text = std.fmt.bufPrint(&pid_buf, "{d}", .{pid}) catch return;
+    const result = std.process.run(alloc, io_mod.getIo(), .{
+        .argv = &.{ "/bin/ps", "-p", pid_text, "-o", "pid=,ppid=,pgid=,stat=,lstart=" },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+        .timeout = .{ .duration = .{ .raw = .fromMilliseconds(500), .clock = .awake } },
+    }) catch |err| {
+        std.debug.print("PID {d} state inspection: {s}\n", .{ pid, @errorName(err) });
+        return;
+    };
+    defer alloc.free(result.stdout);
+    defer alloc.free(result.stderr);
+    std.debug.print("PID PPID PGID STAT STARTED: {s}{s}\n", .{ result.stdout, result.stderr });
 }
 
 fn expectProcessGone(pid: std.posix.pid_t) !void {
@@ -4268,6 +4296,7 @@ fn expectProcessGone(pid: std.posix.pid_t) !void {
             else => return err,
         };
         if (io_mod.milliTimestamp() - started_ms > 1000) {
+            reportProcessStillPresentForTest(std.testing.allocator, pid);
             std.posix.kill(pid, std.posix.SIG.KILL) catch {};
             return error.TestUnexpectedResult;
         }
