@@ -233,6 +233,8 @@ type ConfigurationControl = {
   child_id: string;
   parent_id: string;
   generation: number;
+  state: string;
+  queue: Array<{ status: string }>;
   configuration: {
     name: string;
     effort: string;
@@ -5007,7 +5009,13 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await active.waitForText("STALE_CHILD_READY", TIMEOUT);
 
         const controlPath = configurationControlPath(fixture);
-        const initial = readConfigurationControl(controlPath);
+        const initial = await waitForConfigurationControl(
+          controlPath,
+          (control) =>
+            control.state === "idle" &&
+            control.queue.length === 1 &&
+            control.queue[0].status === "completed",
+        );
         await active.sendKeys("Tab");
         await active.sendKeys("C-x");
         await active.waitForComposer(TIMEOUT);

@@ -3896,6 +3896,87 @@ test "blank assistant tail keeps a growing tool group out of history" {
     }
 }
 
+test "quiet frames after a tool rewrite keep the growing group out of history" {
+    const alloc = std.testing.allocator;
+    var h = try Harness.init(alloc, 80, 14, 3);
+    defer h.deinit();
+    var input = InputRuntime{};
+    defer input.deinit(alloc);
+    var approval = approval_prompt.ApprovalPrompt{};
+    defer approval.deinit(alloc);
+
+    try h.shell.initViewport(&h.metrics, 8);
+    _ = try h.shell.appendRawTranscriptEntry(alloc, "settled startup context\n");
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+
+    const group = types.ToolPresentationGroupId{ .turn_id = 95, .anchor_step_id = 1 };
+    var call_ids: [17][20]u8 = undefined;
+    for (0..13) |index| {
+        const call_id = try std.fmt.bufPrint(&call_ids[index], "quiet-frame-{d}", .{index});
+        try applyCompletedReadForGroupFinalityResizeTest(&h, 95, call_id, group);
+    }
+    const running_call_id = try std.fmt.bufPrint(&call_ids[13], "quiet-frame-13", .{});
+    _ = try h.shell.applyToolLifecycle(alloc, .{ .authoritative_started = .{
+        .id = .{ .turn_id = 95, .call_id = running_call_id },
+        .presentation_group_id = group,
+        .reconciles_provisional_call_id = null,
+        .tool_name = "read_file",
+        .activity_kind = .read,
+    } });
+    h.frame_redraw = true;
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+    var held_source = try h.shell.prepareTranscriptSource(alloc, null);
+    defer held_source.deinit(alloc);
+    const held = h.shell.stableTranscriptProjectionForFlow(held_source.bytes) orelse
+        return error.TestExpectedStableTranscript;
+    try std.testing.expect(held.visual_offset > held.history_visual_offset);
+
+    for (13..17) |index| {
+        const call_id = try std.fmt.bufPrint(&call_ids[index], "quiet-frame-{d}", .{index});
+        _ = try h.shell.applyToolLifecycle(alloc, .{ .terminal = .{
+            .id = .{ .turn_id = 95, .call_id = call_id },
+            .outcome = .{ .kind = .completed, .summary = "Read fixed-point fixture" },
+        } });
+        if (index + 1 < call_ids.len) {
+            const next_call_id = try std.fmt.bufPrint(&call_ids[index + 1], "quiet-frame-{d}", .{index + 1});
+            _ = try h.shell.applyToolLifecycle(alloc, .{ .authoritative_started = .{
+                .id = .{ .turn_id = 95, .call_id = next_call_id },
+                .presentation_group_id = group,
+                .reconciles_provisional_call_id = null,
+                .tool_name = "read_file",
+                .activity_kind = .read,
+            } });
+        }
+        // The first frame re-anchors the rewritten group. A quiet follow-up
+        // frame must retain the same finality boundary during a network wait.
+        for (0..2) |_| {
+            h.frame_redraw = true;
+            try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+            try h.flush();
+            var source = try h.shell.prepareTranscriptSource(alloc, null);
+            defer source.deinit(alloc);
+            try std.testing.expectEqual(@as(usize, 1), source.finality.tool_turn_floors.len);
+            if (index + 1 == call_ids.len) {
+                try std.testing.expect(std.mem.find(u8, source.bytes, "17 tool calls · 17 read") != null);
+            }
+            const projection = h.shell.stableTranscriptProjectionForFlow(source.bytes) orelse
+                return error.TestExpectedStableTranscript;
+            try std.testing.expectEqual(held.history_visual_offset, projection.history_visual_offset);
+            try std.testing.expectEqual(@as(u16, 0), h.last_frame.committed_scroll_rows);
+        }
+    }
+
+    _ = try h.shell.streamAssistantChunk(alloc, &h.metrics, "FINAL_ANSWER\nnext line\n");
+    h.frame_redraw = true;
+    try renderTestFooter(&h, &input, &approval, &h.frame_redraw);
+    try h.flush();
+    try std.testing.expect(h.last_frame.committed_scroll_rows > 0);
+    try std.testing.expect(h.last_frame.transcript_history_floor_respected);
+    try std.testing.expectEqual(@as(u16, 0), h.last_frame.unplanned_scroll_rows);
+}
+
 test "completed tool group lets streamed assistant hard lines enter history" {
     const alloc = std.testing.allocator;
     var h = try Harness.init(alloc, 80, 14, 3);
