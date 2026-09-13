@@ -4485,6 +4485,8 @@ describe.skipIf(!tmuxAvailable())("tui: Agents & processes", () => {
         await pasteVisibleText(active, "POINTER_CHILD_INITIAL");
         await active.sendKeys("Enter");
         await active.waitForText("CHILD_POINTER_READY", TIMEOUT);
+        // Completion removes live-work rows and moves the composer.
+        await active.waitForText("status: idle · busy: no", TIMEOUT);
 
         await active.sendLiteralText("abcdef");
         const pane = await active.waitForText("abcdef", TIMEOUT);
