@@ -224,10 +224,13 @@ def publish(plan: dict, assets: pathlib.Path, notes: pathlib.Path, *, qualified_
     if release is None:
         if qualified_run is not None:
             raise ValueError("recovery requires an existing release draft")
-        run("gh", "release", "create", tag, "--repo", REPOSITORY, "--verify-tag", "--draft", "--title", tag, "--notes-file", str(notes))
-        release = find_release(tag)
-        if release is None:
-            raise ValueError("created draft release could not be found")
+        # Use the created resource directly; the release list can lag behind a successful write.
+        release = api("releases", payload={
+            "tag_name": tag, "target_commitish": source, "name": tag,
+            "draft": True, "prerelease": False, "body": notes.read_text(),
+        })
+        if not isinstance(release, dict) or release.get("tag_name") != tag or release.get("draft") is not True or release.get("prerelease") is not False:
+            raise ValueError("created release does not match the planned draft")
     release = refresh_release(release, tag)
     if qualified_run is not None and release.get("draft") is not True:
         raise ValueError("recovery requires an unpublished release draft")

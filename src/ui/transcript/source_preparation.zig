@@ -71,6 +71,7 @@ fn collectFinalityNominations(
     var nominations: std.ArrayList(FinalityNomination) = .empty;
     errdefer nominations.deinit(alloc);
 
+    var assistant_tail_has_visible_text = false;
     const assistant_tail_entry_id: ?u32 = if (self.entries.items.len > 0) tail: {
         const tail_index = self.entries.items.len - 1;
         const tail_entry = self.entries.items[tail_index];
@@ -80,6 +81,11 @@ fn collectFinalityNominations(
         {
             break :tail null;
         }
+        assistant_tail_has_visible_text = std.mem.trim(
+            u8,
+            tail_entry.assistant_turn.segments.text.items,
+            " \t\r\n",
+        ).len > 0;
         break :tail tail_entry.id();
     } else null;
 
@@ -178,10 +184,10 @@ fn collectFinalityNominations(
         const identity = entry_tool_identities.get(entry_id) orelse continue;
         const turn = turn_nominations.get(identity.turn_id).?;
         if (turn.selected_entry_id != entry_id) continue;
-        // A later assistant entry closes a concrete group once all of its
-        // tools are terminal. Any subsequent tool start after visible text
-        // receives a new presentation-group identity.
-        if (assistant_tail_entry_id != null and
+        // Visible assistant text closes a concrete group once all of its
+        // tools are terminal. An empty entry between silent tool steps can
+        // still be followed by another tool in the same group.
+        if (assistant_tail_has_visible_text and
             turn.selected_group_id != null and
             turn.selected_group_terminal)
         {

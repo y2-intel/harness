@@ -7029,11 +7029,11 @@ pub const TranscriptRuntime = struct {
         const semantic_rows: u32 = if (geometry_rebase)
             geometry_history_rows
         else if (!recovery_rebase)
-            // Normal-buffer recovery restores rows the takeover already
-            // displaced into scrollback; that restore is display repair,
-            // not a content release, so the finality clamp does not apply.
+            // Structured tool rewrites also require normal-buffer repair.
+            // Repair does not finalize those rows: only their final prefix
+            // may enter irreversible history on a compatible frame.
             if (anchor.normal_buffer_recovery_pending)
-                target_offset -| anchor.history_visual_offset
+                releasable_advance
             else if (anchor.history_catchup_pending)
                 releasable_advance
             else

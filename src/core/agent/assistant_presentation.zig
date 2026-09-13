@@ -3472,7 +3472,9 @@ test "long lines of unmatched or unbalanced delimiters render in linear time" {
     try line.append(alloc, '\n');
     const nested_started = io_mod.nanoTimestamp();
     try processor.push(alloc, line.items, &out);
-    try std.testing.expect(@divTrunc(io_mod.nanoTimestamp() - nested_started, std.time.ns_per_ms) < 500);
+    const nested_elapsed_ms = @divTrunc(io_mod.nanoTimestamp() - nested_started, std.time.ns_per_ms);
+    if (nested_elapsed_ms >= 500) std.debug.print("nested delimiter rendering took {d}ms (limit 500ms)\n", .{nested_elapsed_ms});
+    try std.testing.expect(nested_elapsed_ms < 500);
     try std.testing.expect(std.mem.startsWith(u8, out.items, "\x1b[3ma \x1b[3ma "));
     // A closer that matches part of its run and then fails to place the rest
     // must cache that failed remainder instead of rescanning other openers.
@@ -3483,7 +3485,9 @@ test "long lines of unmatched or unbalanced delimiters render in linear time" {
     try line.append(alloc, '\n');
     const residual_started = io_mod.nanoTimestamp();
     try processor.push(alloc, line.items, &out);
-    try std.testing.expect(@divTrunc(io_mod.nanoTimestamp() - residual_started, std.time.ns_per_ms) < 500);
+    const residual_elapsed_ms = @divTrunc(io_mod.nanoTimestamp() - residual_started, std.time.ns_per_ms);
+    if (residual_elapsed_ms >= 500) std.debug.print("residual delimiter rendering took {d}ms (limit 500ms)\n", .{residual_elapsed_ms});
+    try std.testing.expect(residual_elapsed_ms < 500);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\x1b[3mb c\x1b[23m_ ") != null);
     for (shapes) |shape| {
         out.clearRetainingCapacity();
@@ -3494,6 +3498,7 @@ test "long lines of unmatched or unbalanced delimiters render in linear time" {
         const started = io_mod.nanoTimestamp();
         try processor.push(alloc, line.items, &out);
         const elapsed_ms = @divTrunc(io_mod.nanoTimestamp() - started, std.time.ns_per_ms);
+        if (elapsed_ms >= 500) std.debug.print("delimiter shape prefix={s} unit={s} repeat={d} took {d}ms (limit 500ms)\n", .{ shape.prefix, shape.unit, shape.repeat, elapsed_ms });
         try std.testing.expect(elapsed_ms < 500);
     }
 }

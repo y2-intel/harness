@@ -175,49 +175,79 @@ class ReleaseDeliveryTests(unittest.TestCase):
             self.assertEqual(set(calls[1][6:]), {str(root / name) for name in expected_assets()})
             self.assertEqual(calls[2][:3], ("gh", "release", "edit"))
 
-    def test_new_and_existing_drafts_publish_without_release_by_tag_endpoint(self):
+    def test_new_draft_uses_creation_response_while_release_listing_remains_stale(self):
+        self.assert_draft_publication(existing=False)
+
+    def test_existing_draft_is_reused_without_creating_another_release(self):
+        self.assert_draft_publication(existing=True)
+
+    def assert_draft_publication(self, *, existing):
         source = "a" * 40
-        for exists in (False, True):
-            with self.subTest(existing_draft=exists), tempfile.TemporaryDirectory() as temp:
-                root = pathlib.Path(temp)
-                make_assets(root)
-                digests = verify_assets(root)
-                draft = {"id": 17, "tag_name": "v0.0.8", "draft": True, "prerelease": False, "assets": []}
-                complete = {**draft, "assets": [dict(name=name, state="uploaded", size=(root / name).stat().st_size, digest="sha256:" + digests[name]) for name in sorted(expected_assets())]}
-                created = exists
-                uploaded = False
-                def optional(path):
-                    if path == "git/ref/tags/v0.0.8": return {"object": {"type": "commit", "sha": source}}
-                    if path == "releases/latest": return {"tag_name": "v0.0.7"}
-                    raise AssertionError(f"unexpected lookup: {path}")
-                def api(path):
-                    self.assertEqual(path, "releases/17")
-                    return complete if uploaded else draft
-                def run(*args):
-                    nonlocal created, uploaded
-                    if args == ("gh", "api", "repos/y2-intel/harness/releases?per_page=100", "--paginate", "--slurp"):
-                        return json.dumps([[{"id": 7, "tag_name": "v0.0.7"}], [draft] if created else []]).encode()
-                    if args[:3] == ("gh", "release", "create"):
-                        self.assertFalse(created, "existing draft must be reused")
-                        self.assertIn("--verify-tag", args)
-                        self.assertIn("--draft", args)
-                        created = True
-                    elif args[:3] == ("gh", "release", "upload"):
-                        self.assertTrue(created)
-                        self.assertEqual(set(args[6:]), {str(root / name) for name in expected_assets()})
-                        uploaded = True
-                    elif args[:3] == ("gh", "release", "edit"):
-                        self.assertTrue(uploaded, "publish only after complete asset validation")
-                        self.assertIn("--draft=false", args)
-                    else:
-                        raise AssertionError(args)
-                    return b""
-                with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", side_effect=optional), patch.object(publish_release, "api", side_effect=api) as api_mock, patch.object(publish_release, "run", side_effect=run) as run_mock:
-                    publish_release.publish({"tag": "v0.0.8", "source_sha": source}, root, root / "notes.md")
-                self.assertEqual(api_mock.call_count, 2)
-                calls = [call.args[:3] for call in run_mock.call_args_list]
-                self.assertEqual(calls.count(("gh", "release", "create")), 0 if exists else 1)
-                self.assertEqual(calls.count(("gh", "release", "edit")), 1)
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp) / "assets"
+            root.mkdir()
+            notes = root.parent / "notes.md"
+            notes.write_text("y2 v0.0.8\n")
+            make_assets(root)
+            digests = verify_assets(root)
+            draft = {"id": 17, "tag_name": "v0.0.8", "draft": True, "prerelease": False, "assets": []}
+            complete = {**draft, "assets": [dict(name=name, state="uploaded", size=(root / name).stat().st_size, digest="sha256:" + digests[name]) for name in sorted(expected_assets())]}
+            created = existing
+            uploaded = False
+            def optional(path):
+                if path == "git/ref/tags/v0.0.8": return {"object": {"type": "commit", "sha": source}}
+                if path == "releases/latest": return {"tag_name": "v0.0.7"}
+                raise AssertionError(f"unexpected lookup: {path}")
+            def api(path, *, payload=None):
+                nonlocal created
+                if path == "releases":
+                    self.assertFalse(created, "existing draft must be reused")
+                    self.assertEqual(payload, {
+                        "tag_name": "v0.0.8", "target_commitish": source, "name": "v0.0.8",
+                        "draft": True, "prerelease": False, "body": "y2 v0.0.8\n",
+                    })
+                    created = True
+                    return draft
+                self.assertEqual(path, "releases/17")
+                self.assertIsNone(payload)
+                self.assertTrue(created)
+                return complete if uploaded else draft
+            def run(*args):
+                nonlocal created, uploaded
+                if args == ("gh", "api", "repos/y2-intel/harness/releases?per_page=100", "--paginate", "--slurp"):
+                    # A successful create need not be immediately visible in the listing.
+                    return json.dumps([[{"id": 7, "tag_name": "v0.0.7"}], [draft] if existing else []]).encode()
+                if args[:3] == ("gh", "release", "create"):
+                    self.assertFalse(created)
+                    created = True
+                elif args[:3] == ("gh", "release", "upload"):
+                    self.assertTrue(created)
+                    self.assertEqual(set(args[6:]), {str(root / name) for name in expected_assets()})
+                    uploaded = True
+                elif args[:3] == ("gh", "release", "edit"):
+                    self.assertTrue(uploaded, "publish only after complete asset validation")
+                    self.assertIn("--draft=false", args)
+                else:
+                    raise AssertionError(args)
+                return b""
+            with patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "optional_api", side_effect=optional), patch.object(publish_release, "api", side_effect=api) as api_mock, patch.object(publish_release, "run", side_effect=run) as run_mock:
+                publish_release.publish({"tag": "v0.0.8", "source_sha": source}, root, notes)
+            self.assertEqual(sum(call.args == ("releases",) for call in api_mock.call_args_list), 0 if existing else 1)
+            calls = [call.args for call in run_mock.call_args_list]
+            self.assertEqual(sum(call[:3] == ("gh", "api", "repos/y2-intel/harness/releases?per_page=100") for call in calls), 1)
+            self.assertEqual(sum(call[:3] == ("gh", "release", "edit") for call in calls), 1)
+
+    def test_creation_response_must_identify_the_planned_draft(self):
+        wrong_releases = [None, {}, {"id": 17, "tag_name": "v0.0.9", "draft": True}, {"id": 17, "tag_name": "v0.0.8", "draft": False}, {"id": 17, "tag_name": "v0.0.8", "draft": True}, {"id": 17, "tag_name": "v0.0.8", "draft": True, "prerelease": True}]
+        with tempfile.TemporaryDirectory() as temp:
+            notes = pathlib.Path(temp) / "notes.md"
+            notes.write_text("y2 v0.0.8\n")
+            for response in wrong_releases:
+                with self.subTest(response=response), patch.object(publish_release, "validate_publish_source"), patch.object(publish_release, "verify_assets"), patch.object(publish_release, "optional_api", return_value={"object": {"type": "commit", "sha": "a" * 40}}), patch.object(publish_release, "find_release", return_value=None), patch.object(publish_release, "api", return_value=response) as api, patch.object(publish_release, "run") as run:
+                    with self.assertRaisesRegex(ValueError, "planned draft"):
+                        publish_release.publish({"tag": "v0.0.8", "source_sha": "a" * 40}, pathlib.Path("unused"), notes)
+                    api.assert_called_once()
+                    run.assert_not_called()
 
     def test_existing_tag_with_different_source_cannot_reach_draft_upload(self):
         with tempfile.TemporaryDirectory() as temp:
