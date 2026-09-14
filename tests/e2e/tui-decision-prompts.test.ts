@@ -2664,6 +2664,19 @@ describe.skipIf(SKIP)("tui: decision prompt input isolation", () => {
       expect(
         requestContainsExactString(ctx.gateway.requests[1]?.body ?? "", LONG_QUESTION_ANSWER),
       ).toBe(true);
+
+      const resolvedRows = stripAnsi(await ctx.session.captureFullScrollbackEscapes()).split("\n");
+      const resolvedQuestionRow = resolvedRows.find((line) =>
+        line.includes("1) When you ask y2 to ask a question"),
+      );
+      expect(resolvedQuestionRow).toBeDefined();
+      expect(resolvedQuestionRow).not.toContain("…");
+      const resolvedContinuation = resolvedRows.find((line) =>
+        line.includes("remain fully visible even when it wraps."),
+      );
+      expect(resolvedContinuation?.indexOf("remain fully visible even when it wraps.")).toBe(5);
+      const resolvedAnswer = resolvedRows.find((line) => line.includes(LONG_QUESTION_ANSWER));
+      expect(resolvedAnswer?.indexOf(LONG_QUESTION_ANSWER)).toBe(5);
       await assertProcessAliveAndClean(ctx);
     },
     TIMEOUT,
