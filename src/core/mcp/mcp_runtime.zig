@@ -9199,6 +9199,22 @@ test "pending authentication challenge overrides stored credential health" {
     );
 }
 
+test "rejected MCP credentials require re-authentication unless superseded" {
+    var server = McpServer{
+        .config = .{ .name = "fixture" },
+        .auth_credentials_present = .init(true),
+    };
+    const rejected_generation = server.auth_generation.load(.acquire);
+    markReauthenticationRequired(&server, rejected_generation);
+    try std.testing.expectEqual(health.AuthenticationState.required, serverAuthenticationState(&server));
+    try std.testing.expect(!server.auth_credentials_present.load(.acquire));
+
+    server.auth_credentials_present.store(true, .release);
+    server.auth_challenge_present.store(false, .release);
+    markReauthenticationRequired(&server, rejected_generation);
+    try std.testing.expectEqual(health.AuthenticationState.authenticated, serverAuthenticationState(&server));
+}
+
 test "logout detachment fences auth publication until rollback" {
     var server = McpServer{
         .config = .{ .name = "fixture" },
@@ -12270,6 +12286,7 @@ fn refreshSharedCredentials(
             alloc,
             "MCP credentials expired. Run /mcp auth for this server.",
         );
+        markReauthenticationRequired(server, source.generation);
         return error.McpAuthenticationRequired;
     }
 
@@ -12284,6 +12301,7 @@ fn refreshSharedCredentials(
             alloc,
             "MCP credential refresh failed. Run /mcp auth for this server.",
         );
+        if (err == error.McpRefreshRejected) markReauthenticationRequired(server, source.generation);
         return err;
     };
     var transferred = false;
@@ -12309,6 +12327,15 @@ fn refreshSharedCredentials(
     installAuthCredentials(alloc, server, &refreshed);
     transferred = true;
     return true;
+}
+
+fn markReauthenticationRequired(server: *McpServer, expected_generation: u64) void {
+    server.auth_lock.lockUncancelable(io_mod.getIo());
+    defer server.auth_lock.unlock(io_mod.getIo());
+    if (server.auth_generation.load(.acquire) != expected_generation) return;
+    advanceAuthGeneration(server);
+    server.auth_challenge_present.store(true, .release);
+    server.auth_credentials_present.store(false, .release);
 }
 
 fn markAuthenticationRequired(alloc: Allocator, server: *McpServer) void {
@@ -12455,6 +12482,7 @@ fn installAuthCredentials(
     if (server.auth_credentials) |*old| old.deinit(alloc);
     server.auth_credentials = credentials.*;
     server.auth_credentials_present.store(true, .release);
+    server.auth_challenge_present.store(false, .release);
     credentials.* = undefined;
 }
 

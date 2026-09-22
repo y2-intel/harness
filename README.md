@@ -179,6 +179,8 @@ Add reusable instructions with skills, connect external tools through MCP, or de
 
 Use `y2 mcp list`, `y2 mcp path`, and `y2 mcp remove NAME` for noninteractive profile management. `y2 mcp trust approve|reject NAME`, `y2 mcp trust approve-all`, and `y2 mcp trust reset` manage workspace-scoped project trust. `y2 mcp auth NAME` and `y2 mcp logout NAME` run the existing remote credential lifecycle without opening the TUI or contacting a model endpoint.
 
+If an MCP server's saved OAuth grant is rejected, `y2 mcp list --connect` reports that re-authentication is required. Temporary token-endpoint failures leave the saved grant available for a later retry.
+
 MCP servers have a 30-second startup timeout by default; set `startup_timeout_ms` on a server when its cold start needs a different bound. For direct `docker run` stdio entries, y2 uses a private container ID file to remove the owned container after shutdown or startup failure. A configuration that already supplies `--cidfile` keeps ownership of its own cleanup policy.
 
 ## Documentation
