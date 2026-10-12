@@ -179,7 +179,7 @@ function startAuthFixture(
   upstreamUrl: string,
   options: {
     wrongState?: boolean;
-    rejectRefresh?: boolean;
+    rejectRefresh?: boolean | "unavailable";
     authorizationMetadataContentType?: string;
     transport?: "http" | "sse";
     rejectToolAuth?: boolean;
@@ -492,8 +492,12 @@ function startAuthFixture(
           }
           if (options.rejectRefresh) {
             return Response.json(
-              { error: "invalid_grant" },
-              { status: 400 },
+              {
+                error: options.rejectRefresh === "unavailable"
+                  ? "temporarily_unavailable"
+                  : "invalid_grant",
+              },
+              { status: options.rejectRefresh === "unavailable" ? 503 : 400 },
             );
           }
           return Response.json({
@@ -3457,9 +3461,62 @@ describe("MCP remote authentication lifecycle", () => {
       expect(upstream.requests).toHaveLength(0);
       expect(readFileSync(credentialPath, "utf8")).toContain(REFRESH_INITIAL);
       expect(result.stdout).not.toContain(REFRESH_INITIAL);
-      expect(result.stderr).not.toContain(REFRESH_INITIAL);
+      expect(result.stderr).toContain("Searching MCP tools");
+      expect(result.stderr).not.toMatch(/panic|error:/i);
       expect(readFileSync(root.trace, "utf8")).not.toContain(REFRESH_INITIAL);
+
+      const listed = await runY2(["mcp", "list", "--connect"], {
+        cwd: root.workspace,
+        env: baseEnv(root),
+        timeoutMs: 20_000,
+      });
+      expect(listed.code).toBe(0);
+      expect(listed.stdout).toMatch(/fixture[\s\S]{0,240}auth=required/);
+      expect(listed.stdout).toContain("run /mcp auth");
+      expect(listed.stderr).toBe("");
     },
     30_000,
   );
+
+  test("transient refresh failure leaves MCP credentials available for retry", async () => {
+    upstream = startModernMcpHttpFixture("json");
+    auth = startAuthFixture(upstream.url, { rejectRefresh: "unavailable" });
+    const root = createRoot(auth);
+    seedExpiredCredentials(root, auth);
+    gateway = startFakeGateway([
+      fakeGatewayToolCall("transient_refresh", "mcp_search_tools", { query: "echo" }),
+      fakeGatewayFinalText("Temporary refresh failure handled."),
+    ], {
+      models: [{ id: MODEL, type: "language", tags: ["tool-use"] }],
+    });
+
+    const result = await runY2(
+      ["ask", "--json", "--auto", "--no-save", "Check the MCP fixture."],
+      {
+        cwd: root.workspace,
+        env: {
+          ...baseEnv(root),
+          OPENAI_BASE_URL: gateway.baseUrl,
+          Y2_API_CHAT_URL: gateway.chatUrl,
+        },
+        timeoutMs: 20_000,
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Temporary refresh failure handled.");
+    expect(result.stderr).toContain("Searching MCP tools");
+    expect(result.stderr).not.toMatch(/panic|error:/i);
+
+    const listed = await runY2(["mcp", "list", "--connect"], {
+      cwd: root.workspace,
+      env: baseEnv(root),
+      timeoutMs: 20_000,
+    });
+    expect(listed.code).toBe(0);
+    expect(auth.refreshes).toBeGreaterThanOrEqual(1);
+    expect(listed.stdout).toMatch(/fixture[\s\S]{0,240}auth=authenticated/);
+    expect(listed.stdout).not.toContain("auth=required");
+    expect(listed.stdout).not.toContain(REFRESH_INITIAL);
+    expect(listed.stderr).toBe("");
+  }, 30_000);
 });
