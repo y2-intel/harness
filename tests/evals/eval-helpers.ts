@@ -93,6 +93,10 @@ export interface EvalResult {
 }
 
 export interface EvalOptions {
+  /**
+   * Wall-clock budget for the whole run. y2 is stopped when it runs out, and
+   * the same value is y2's default limit for terminal commands.
+   */
   timeoutSec?: number;
   cwd?: string;
   model?: string;
@@ -161,6 +165,19 @@ export function buildEvalProcessEnv(
   };
 }
 
+export function buildEvalArgs(prompt: string, timeoutSec: number): string[] {
+  // y2 reads --timeout in seconds.
+  return [
+    "ask",
+    "--auto",
+    "--json",
+    "--no-save",
+    "--timeout",
+    String(timeoutSec),
+    prompt,
+  ];
+}
+
 export async function runEval(
   prompt: string,
   opts: EvalOptions = {},
@@ -181,20 +198,13 @@ export async function runEval(
       );
     }
 
-    const args = [
-      "ask",
-      "--auto",
-      "--json",
-      "--no-save",
-      "--timeout",
-      String(timeoutSec * 1000),
-      prompt,
-    ];
+    const args = buildEvalArgs(prompt, timeoutSec);
 
     const result = await new Promise<{
       stdout: string;
       stderr: string;
       code: number | null;
+      timedOut: boolean;
     }>((resolvePromise) => {
       const env = buildEvalProcessEnv(home, model);
       const child = nodeSpawn(Y2_BIN, args, {
@@ -209,14 +219,31 @@ export async function runEval(
       child.stderr.on("data", (d: Buffer) => stderrBufs.push(d));
       child.stdin.end();
 
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        // y2 may have exited already with its close event still pending.
+        timedOut =
+          child.exitCode === null &&
+          child.signalCode === null &&
+          child.kill("SIGKILL");
+      }, timeoutSec * 1000);
+
       child.on("close", (code: number | null) => {
+        clearTimeout(timer);
         resolvePromise({
           stdout: Buffer.concat(stdoutBufs).toString(),
           stderr: Buffer.concat(stderrBufs).toString(),
           code,
+          timedOut,
         });
       });
     });
+
+    if (result.timedOut) {
+      throw new Error(
+        `y2 ask did not finish within ${timeoutSec}s\nstderr: ${result.stderr.slice(-1000)}`,
+      );
+    }
 
     let json: HeadlessResult;
     try {
