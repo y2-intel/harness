@@ -216,6 +216,7 @@ fn executeDirectReadOnlyWithLimitAndTestControls(
         const stage = plan.stages[child_count];
         var environment = try environmentForProfile(scratch, stage.environment_profile);
         defer environment.deinit();
+        try command_runner.apply_agent_environment(&environment);
 
         const child = std.process.spawn(io_mod.getIo(), .{
             .argv = stage.argv,
@@ -427,6 +428,26 @@ fn environmentForProfile(
         try environment.put("PAGER", "cat");
     }
     return environment;
+}
+
+test "direct commands receive y2 agent environment" {
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const stages = [_]command_effect.DirectStage{.{
+        .executable = "/usr/bin/env",
+        .argv = &.{"/usr/bin/env"},
+        .environment_profile = .basic_read_only,
+    }};
+    const result = try executeDirectReadOnly(.{
+        .max_command_output_bytes = 4096,
+    }, std.testing.allocator, .{
+        .command = "env",
+        .cwd = "/tmp",
+        .stages = &stages,
+    });
+    defer std.testing.allocator.free(result.output);
+
+    try std.testing.expect(std.mem.find(u8, result.output, "AI_AGENT=y2") != null);
 }
 
 const DirectTerminationCause = enum {
