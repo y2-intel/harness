@@ -5580,6 +5580,41 @@ describe("effect-aware command permissions", () => {
   );
 
   test(
+    "y2 ask forwards agent identity to clean and user commands",
+    async () => {
+      for (const profile of ["clean", "user"] as const) {
+        const root = createIsolatedRoot();
+        const tracePath = join(root.root, "trace.log");
+        const gateway = startFakeGateway([
+          toolCall(`printf 'agent=%s' "$AI_AGENT"`, { profile }),
+          finalText("agent environment complete"),
+        ]);
+        const result = await runY2(
+          ["ask", "--yolo", "--quiet", "--json", "--no-save", "Report the agent environment."],
+          {
+            cwd: root.workspace,
+            env: gatewayEnv(root, gateway, {
+              AI_AGENT: "other-agent",
+              Y2_TRACE_LOG: tracePath,
+              Y2_TRACE_SCOPES: "core",
+            }),
+            timeoutMs: TIMEOUT,
+          },
+        );
+
+        expect(result.code).toBe(0);
+        expect(result.stderr.toLowerCase()).not.toContain("error");
+        JSON.parse(result.stdout.trim());
+        expect(toolResultText(gateway.requests[1]!.body, "command_1")).toContain("agent=y2");
+        if (profile === "user") expectUserProfileTrace(tracePath);
+        expectNoHostileExecutables(root);
+        expectNoCommandArtifacts(root);
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
     "y2 ask yolo executes pwd through the default user profile without an artifact",
     async () => {
       const root = createIsolatedRoot();
