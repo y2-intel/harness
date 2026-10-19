@@ -920,7 +920,14 @@ fn refreshCredentialsCore(
         auth.headers(),
     );
     defer response.deinit(alloc);
-    if (response.status != .ok) return error.McpRefreshRejected;
+    if (response.status != .ok) {
+        // Only a rejected grant is terminal. Rate limits and server failures
+        // must leave the existing credentials eligible for a later retry.
+        if (response.status == .bad_request and try refreshRejectionIsFinal(alloc, response.body)) {
+            return error.McpRefreshRejected;
+        }
+        return error.McpRefreshUnavailable;
+    }
     try validateJsonContentType(response.content_type);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, alloc, response.body, .{});
@@ -960,6 +967,14 @@ fn refreshCredentialsCore(
     }
     next.expires_at_ms = expires_at_ms;
     return next;
+}
+
+fn refreshRejectionIsFinal(alloc: Allocator, body: []const u8) !bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const error_value = parsed.value.object.get("error") orelse return false;
+    return error_value == .string and std.mem.eql(u8, error_value.string, "invalid_grant");
 }
 
 fn waitForRefreshCancellation(
@@ -2516,4 +2531,12 @@ test "interactive callback wait observes caller and lifecycle cancellation" {
         );
         try std.testing.expect(io_mod.milliTimestamp() - started_ms < 1_000);
     }
+}
+
+test "refresh rejection is final only for invalid_grant" {
+    const alloc = std.testing.allocator;
+    try std.testing.expect(try refreshRejectionIsFinal(alloc, "{\"error\":\"invalid_grant\"}"));
+    try std.testing.expect(!(try refreshRejectionIsFinal(alloc, "{\"error\":\"temporarily_unavailable\"}")));
+    try std.testing.expect(!(try refreshRejectionIsFinal(alloc, "<html>502</html>")));
+    try std.testing.expect(!(try refreshRejectionIsFinal(alloc, "{}")));
 }
