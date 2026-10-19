@@ -4202,6 +4202,19 @@ test "parse local surface args accepts only json" {
     try std.testing.expectError(error.InvalidLocalSurfaceArgs, parseLocalSurfaceArgs(&.{@constCast("--wat")}));
 }
 
+test "parse update alias forwards release channel and JSON arguments" {
+    const command_catalog = testCommandCatalog();
+    switch (parse(command_catalog, &.{ @constCast("update"), @constCast("--channel"), @constCast("stable"), @constCast("--json") })) {
+        .upgrade => |rest| {
+            try std.testing.expectEqual(@as(usize, 3), rest.len);
+            const options = try parseUpgradeArgs(rest);
+            try std.testing.expectEqual(update_target.Channel.stable, options.channel.?);
+            try std.testing.expectEqual(output_contracts.OutputFormat.json, options.format);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "parse upgrade args accepts a remembered release channel" {
     const defaults = try parseUpgradeArgs(&.{});
     try std.testing.expectEqual(output_contracts.OutputFormat.text, defaults.format);

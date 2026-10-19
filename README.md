@@ -40,6 +40,20 @@ For a reproducible install, set `Y2_RELEASE_TAG` to a tag from the [published re
 export PATH="$HOME/.y2/bin:$PATH" && curl -fsSL https://y2.dev/harness/install.sh | sh -s -- "$Y2_RELEASE_TAG"
 ```
 
+To update an installed harness, run:
+
+```bash
+y2 upgrade
+```
+
+`y2 update` is an alias in newer builds. Existing v0.0.10 clients should use
+`y2 upgrade` first. The updater selects the archive for macOS or Linux and Intel
+(x86_64) or ARM64 (aarch64), verifies its SHA-256 checksum, and replaces the running
+executable. Linux distributions share the Linux archive for their architecture.
+The install location must be writable by your user. Windows is not supported.
+Use `y2 upgrade --json` for structured results, or `--channel dev` to select and
+remember the development release channel.
+
 Or build from source:
 
 ```bash
