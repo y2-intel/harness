@@ -651,6 +651,59 @@ describe("cli: status", () => {
   );
 
   test(
+    "y2 update aliases upgrade help and checks the native release in text and JSON",
+    async () => {
+      const help = await runY2(["update", "--help"]);
+      const upgradeHelp = await runY2(["upgrade", "--help"]);
+      expect(help.code).toBe(0);
+      expect(help.stdout).toBe(upgradeHelp.stdout);
+      expect(help.stdout).toContain("y2 update is an alias");
+      const root = mkdtempSync(join(tmpdir(), "y2-update-alias-"));
+      const home = join(root, "home");
+      mkdirSync(home);
+      const requested: string[] = [];
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(request) {
+          const path = new URL(request.url).pathname;
+          requested.push(path);
+          return path === "/latest.txt"
+            ? new Response(expectedVersion() + "\n")
+            : new Response("Unexpected download", { status: 404 });
+        },
+      });
+      try {
+        for (const args of [["update"], ["update", "--json"]]) {
+          const result = await runY2(args, {
+            cwd: root,
+            env: {
+              ...NO_API_AUTH,
+              HOME: home,
+              Y2_E2E_UPGRADE_BASE_URL: `http://127.0.0.1:${server.port}`,
+            },
+          });
+          expect(result.code).toBe(0);
+          expect(result.stderr).toBe("");
+          if (args.includes("--json")) {
+            expect(JSON.parse(result.stdout.trim())).toMatchObject({
+              kind: "upgrade", status: "up_to_date",
+              current: expectedVersion(), latest: expectedVersion(),
+            });
+          } else {
+            expect(result.stdout).toContain("up to date");
+          }
+        }
+        expect(requested).toEqual(["/latest.txt", "/latest.txt"]);
+      } finally {
+        server.stop(true);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
     "y2 upgrade help documents release channels",
     async () => {
       const result = await runY2(["upgrade", "--help"]);

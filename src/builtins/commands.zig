@@ -248,11 +248,17 @@ pub const top_level_specs = [_]TopLevelSpec{
     .{
         .kind = .upgrade,
         .token = "upgrade",
+        .aliases = &.{"update"},
         .usage = "upgrade [--channel <stable|dev>] [--json]",
-        .summary = "Upgrade the Y2 harness on the selected release channel",
+        .summary = "Upgrade the y2 harness (alias: update)",
         .options = &.{
             .{ .flag = "--channel <stable|dev>", .description = "Select and remember the release channel" },
             json_option,
+        },
+        .details = &.{
+            "y2 update is an alias for y2 upgrade and accepts the same options.",
+            "Downloads and checksum-verifies the archive for this binary's operating system and architecture, then replaces the running executable.",
+            "Supports macOS and Linux on x86_64 and ARM64. Linux uses the same archive across distributions.",
         },
     },
     .{
