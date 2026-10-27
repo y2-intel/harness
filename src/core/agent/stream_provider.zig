@@ -158,6 +158,8 @@ pub const CredentialLease = struct {
 /// Pure provider input used by request serializers and permission reviewers.
 /// Every slice and JSON value is borrowed for the call.
 pub const RequestData = struct {
+    /// Local session identity. Agent Y2 continues one workspace thread per session.
+    session_id: ?[]const u8 = null,
     model: []const u8,
     messages: []const types.ChatMessage,
     tools: ToolSelection = .{},
@@ -201,6 +203,7 @@ pub const ModelRequest = struct {
 
     pub fn data(self: ModelRequest) RequestData {
         return .{
+            .session_id = self.session_id,
             .model = self.model,
             .messages = self.messages,
             .tools = self.tools,

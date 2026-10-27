@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 const image_attachments = @import("../core/images/image_attachments.zig");
 const io_mod = @import("../core/shared/io.zig");
@@ -29,7 +30,19 @@ const transfer_buffer_bytes: usize = 256 * 1024;
 const connect_timeout_ms: i64 = 30_000;
 const response_head_timeout_ms: i64 = 30_000;
 const usage_trailer_timeout_ms: i64 = 1_000;
-const user_agent = "y2-intel-harness/" ++ build_options.app_version;
+const client_name = "y2-intel-harness";
+const user_agent = client_name ++ "/" ++ build_options.app_version;
+const client_os: ?[]const u8 = switch (builtin.os.tag) {
+    .macos => "macos",
+    .linux => "linux",
+    .windows => "windows",
+    else => null,
+};
+const client_arch: ?[]const u8 = switch (builtin.cpu.arch) {
+    .x86_64 => "x86_64",
+    .aarch64 => "aarch64",
+    else => null,
+};
 
 pub const Mode = enum {
     y2_agent,
@@ -138,7 +151,9 @@ pub fn buildRequest(
         try writer.writeAll(",\"tool_choice\":\"none\"");
     }
 
-    if (mode == .openai_compatible) {
+    if (mode == .y2_agent) {
+        try writeY2Metadata(writer, request.session_id, deviceName());
+    } else {
         try writer.writeAll(",\"stream_options\":{\"include_usage\":true}");
         if (request.max_output_tokens) |limit| {
             try writer.print(",\"max_tokens\":{d}", .{limit});
@@ -161,6 +176,65 @@ pub fn buildRequest(
 
     try writer.writeByte('}');
     return out.toOwnedSlice();
+}
+
+/// Agent Y2 keeps one workspace thread per local session and records which
+/// client and device wrote it, so harness turns stay distinct from web chat.
+fn writeY2Metadata(writer: *std.Io.Writer, session_id: ?[]const u8, device: ?[]const u8) !void {
+    try writer.writeAll(",\"metadata\":{\"source\":");
+    try std.json.Stringify.value(client_name, .{}, writer);
+    if (session_id) |id| {
+        try writer.writeAll(",\"externalThreadId\":");
+        try std.json.Stringify.value(id, .{}, writer);
+    }
+    try writer.writeAll(",\"client\":{\"name\":");
+    try std.json.Stringify.value(client_name, .{}, writer);
+    try writer.writeAll(",\"version\":");
+    try std.json.Stringify.value(build_options.app_version, .{}, writer);
+    if (client_os) |os| {
+        try writer.writeAll(",\"os\":");
+        try std.json.Stringify.value(os, .{}, writer);
+    }
+    if (client_arch) |arch| {
+        try writer.writeAll(",\"arch\":");
+        try std.json.Stringify.value(arch, .{}, writer);
+    }
+    if (device) |name| {
+        try writer.writeAll(",\"device\":");
+        try std.json.Stringify.value(name, .{}, writer);
+    }
+    if (session_id) |id| {
+        try writer.writeAll(",\"sessionId\":");
+        try std.json.Stringify.value(id, .{}, writer);
+    }
+    try writer.writeAll("}}");
+}
+
+var device_name_buffer: [std.posix.HOST_NAME_MAX]u8 = undefined;
+
+/// Host name of this machine, or null when the host does not report one.
+fn deviceName() ?[]const u8 {
+    if (builtin.is_test) return null;
+    const name = std.posix.gethostname(&device_name_buffer) catch return null;
+    return if (name.len == 0) null else name;
+}
+
+test "Y2 metadata identifies the harness session, client, and device" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try writeY2Metadata(&out.writer, "session-1", "studio");
+    const body = out.written();
+    try std.testing.expect(std.mem.find(u8, body, "\"source\":\"y2-intel-harness\"") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"externalThreadId\":\"session-1\"") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"client\":{\"name\":\"y2-intel-harness\",\"version\":\"" ++ build_options.app_version ++ "\"") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"device\":\"studio\"") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"sessionId\":\"session-1\"") != null);
+
+    var anonymous: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer anonymous.deinit();
+    try writeY2Metadata(&anonymous.writer, null, null);
+    try std.testing.expect(std.mem.find(u8, anonymous.written(), "externalThreadId") == null);
+    try std.testing.expect(std.mem.find(u8, anonymous.written(), "device") == null);
 }
 
 fn validateModel(model: []const u8, mode: Mode) !void {
@@ -1056,6 +1130,7 @@ test "Y2 request preserves the local coding-agent tool protocol" {
         .{ .role = .tool, .tool_call_id = "call_1", .tool_name = "read_file", .content = "tool output" },
     };
     const body = try buildRequest(std.testing.allocator, .{
+        .session_id = "session-1",
         .model = "y2-agent",
         .messages = &messages,
         .tools = .{ .additional_functions = &.{tool} },
@@ -1076,6 +1151,22 @@ test "Y2 request preserves the local coding-agent tool protocol" {
     try std.testing.expect(std.mem.find(u8, body, "max_tokens") == null);
     try std.testing.expect(parsed.value.object.get("stream_options") == null);
     try std.testing.expect(std.mem.find(u8, body, "\"tools\":[{\"type\":\"function\"") != null);
+    const metadata = parsed.value.object.get("metadata").?.object;
+    try std.testing.expectEqualStrings("session-1", metadata.get("externalThreadId").?.string);
+    try std.testing.expectEqualStrings("y2-intel-harness", metadata.get("client").?.object.get("name").?.string);
+}
+
+test "direct OpenAI-compatible requests carry no Y2 metadata" {
+    const messages = [_]types.ChatMessage{.{ .role = .user, .content = "hello" }};
+    const body = try buildRequest(std.testing.allocator, .{
+        .session_id = "session-1",
+        .model = "gpt-test",
+        .messages = &messages,
+        .tool_choice = .auto,
+        .provider_options = .{},
+    }, .openai_compatible);
+    defer std.testing.allocator.free(body);
+    try std.testing.expect(std.mem.find(u8, body, "metadata") == null);
 }
 
 test "OpenAI-compatible request preserves local function tool history" {
