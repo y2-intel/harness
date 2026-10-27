@@ -20,7 +20,6 @@ PUBLISH_LIBY2_WORKFLOW_PATH = (
 PGSO_WORKFLOW_PATH = (
     REPO_ROOT / ".github" / "workflows" / "pgso-macos-arm64.yml"
 )
-DEV_RELEASE_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "dev-release.yml"
 PGSO_SETUP_ACTION_PATH = REPO_ROOT / ".github" / "actions" / "setup-pgso" / "action.yml"
 SIGNING_IDENTITY = "Developer ID Application: Y2 Test (Y2TEST1234)"
 SIGNING_IDENTIFIER = "dev.y2.harness"
@@ -361,7 +360,6 @@ class MacosSigningWorkflowTests(unittest.TestCase):
     def test_cli_release_defers_apple_signing(self) -> None:
         release = RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
         pgso = PGSO_WORKFLOW_PATH.read_text(encoding="utf-8")
-        dev_release = DEV_RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn("build-macos-x86_64:", release)
         self.assertIn("runs-on: macos-15-intel", release)
@@ -377,7 +375,7 @@ class MacosSigningWorkflowTests(unittest.TestCase):
             "\n  release:\n", 1
         )[0]
         self.assertNotIn("secrets:", arm64_caller)
-        workflow_call = pgso.split("  workflow_dispatch:\n", 1)[0]
+        workflow_call = pgso.split("\njobs:\n", 1)[0]
         aggregate = pgso.split("  aggregate:\n", 1)[1].split(
             "\n  package-stable-release:\n", 1
         )[0]
@@ -401,8 +399,6 @@ class MacosSigningWorkflowTests(unittest.TestCase):
             self.assertNotIn(secret_name, aggregate)
             self.assertNotIn(secret_name, release)
             self.assertNotIn(secret_name, package_release)
-            self.assertNotIn(secret_name, dev_release)
-        self.assertNotIn("sign-and-notarize-macos", dev_release)
 
     def test_pgso_release_chain_pins_every_external_action(self) -> None:
         mutable_references: list[str] = []

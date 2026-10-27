@@ -87,7 +87,7 @@ Candidate behavior qualification records each scenario's debug trace under `cand
 
 Startup compares `help`, `--version`, `status --json`, `background --json`, `doctor --json`, and `sessions --json`. It first executes each verified immutable artifact once to require successful output and empty stderr. Timing then uses pinned Hyperfine with no intermediate shell, ten warmups per artifact in each of at least 100 alternating rounds, and at least 1,000 measured samples per artifact. No contiguous block exceeds ten measured runs, so short machine-noise bursts are distributed between control and candidate while p95 retains 50 tail observations. Startup measurement sets `Y2_DISABLE_KEYCHAIN=1` so the compiler comparison cannot be dominated by host-global macOS Keychain subprocess latency; the deterministic behavior corpus remains responsible for exercising Keychain integration. No per-sample Python process management or evidence-file write is included in the timed boundary, and measurement never replaces `zig-out/bin/y2`. Heavy qualification compares file indexing at 100,000 paths, UI activity, and approval transcript, diff, combined, and large-payload workloads.
 
-Heavy comparisons use at least 50 measured samples for each artifact and alternate pair order AB then BA. Command failures and timeouts fail qualification and are never replaced. A candidate fails when either p50 or p95 is more than 10% slower than its matching control. The existing Linux startup workflow remains the authority for the repository's absolute 2 ms command budget.
+Heavy comparisons use at least 50 measured samples for each artifact and alternate pair order AB then BA. Command failures and timeouts fail qualification and are never replaced. A candidate fails when either p50 or p95 is more than 10% slower than its matching control. The Linux x86_64 Full CI release job remains the authority for the repository's absolute 2 ms command budget.
 
 The heavy benchmarks are trained once by the candidate coordinator, not rebuilt
 by measurement jobs. For each benchmark, the coordinator selects only functions
@@ -130,8 +130,8 @@ The driver also streams operational progress to the invoking terminal or GitHub 
 Corpus scenarios inherit only a small operating-system environment allowlist. Credentials, live-test flags, tracing settings, and repository dotenv files are excluded unless a value is explicitly declared in the versioned corpus. The runner temporarily installs the assigned artifact at `zig-out/bin/y2` for E2E compatibility, then restores the prior file (or prior absence) after success, failure, timeout, or cancellation.
 
 The native workflow uploads bounded phase evidence rather than caches or
-intermediate compiler objects. Pull requests and manual runs have read-only
-repository permissions and do not change release, dev-channel, CDN, tag, or
-GitHub Release state. The stable release workflow may call the same gate with
-release packaging enabled; only the candidate copied by the successful final
-aggregate is packaged as `y2-macos-aarch64.tar.gz`.
+intermediate compiler objects. GitHub runs this reusable workflow only from the
+canonical main Release workflow, after Full CI succeeds. PRs and standalone
+manual runs do not trigger it. Local qualification commands remain available.
+Only the candidate copied by the successful final aggregate is packaged as
+`y2-macos-aarch64.tar.gz`; publication still belongs to the Release workflow.

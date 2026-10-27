@@ -133,13 +133,79 @@ fn reversibleGit(words: []const command_lex.ArgvToken) bool {
     if (std.mem.eql(u8, subcommand, "worktree")) {
         return words.len >= 2 and std.mem.eql(u8, words[1].value, "list");
     }
-    if (std.mem.eql(u8, subcommand, "fetch")) {
-        for (words[1..]) |word| {
-            if (std.mem.eql(u8, word.value, "--prune") or
-                std.mem.eql(u8, word.value, "-p") or
-                std.mem.eql(u8, word.value, "--prune-tags")) return false;
+    if (std.mem.eql(u8, subcommand, "fetch")) return reversible_git_fetch(words[1..]);
+    return false;
+}
+
+/// Accept exact known options only: git also accepts abbreviated long options,
+/// including options that execute another program or delete remote refs.
+const reversible_git_fetch_flags = [_][]const u8{
+    "--all",                    "--tags",               "-t",
+    "--no-tags",                "-n",                   "--quiet",
+    "-q",                       "--verbose",            "-v",
+    "--dry-run",                "--force",              "-f",
+    "--unshallow",              "--update-shallow",     "--progress",
+    "--multiple",               "--atomic",             "--append",
+    "-a",                       "--porcelain",          "--show-forced-updates",
+    "--no-show-forced-updates", "--write-fetch-head",   "--no-write-fetch-head",
+    "--set-upstream",           "--refetch",            "--prefetch",
+    "--ipv4",                   "-4",                   "--ipv6",
+    "-6",                       "--recurse-submodules", "--no-recurse-submodules",
+};
+
+/// Value options require `--name=value`. `--filter` changes the repository's
+/// partial-clone configuration and therefore remains on the review path.
+const reversible_git_fetch_value_options = [_][]const u8{
+    "--depth=", "--deepen=",             "--shallow-since=", "--shallow-exclude=",
+    "--jobs=",  "--recurse-submodules=",
+};
+
+fn reversible_git_fetch(words: []const command_lex.ArgvToken) bool {
+    var options_ended = false;
+    for (words) |word| {
+        const value = word.value;
+        if (!options_ended and std.mem.eql(u8, value, "--")) {
+            options_ended = true;
+            continue;
         }
-        return true;
+        if (!options_ended and value.len > 0 and value[0] == '-') {
+            if (!is_reversible_git_fetch_option(value)) return false;
+            continue;
+        }
+        // Repositories after the option separator can still name a program.
+        if (names_git_remote_helper(value)) return false;
+    }
+    return true;
+}
+
+/// Built-in transports, plus the HTTP helpers in git's own exec path.
+const builtin_git_url_schemes = [_][]const u8{ "file", "git", "ssh", "git+ssh", "ssh+git", "http", "https" };
+
+/// Git can find a remote helper on PATH for `<helper>::<address>` or an unknown
+/// URL scheme. Match the helper-name characters used by git's transport parser.
+fn names_git_remote_helper(value: []const u8) bool {
+    var end: usize = 0;
+    while (end < value.len) : (end += 1) {
+        const byte = value[end];
+        const special = byte == '+' or byte == '-' or byte == '.';
+        if (!std.ascii.isAlphanumeric(byte) and (end == 0 or !special)) break;
+    }
+    if (end == 0) return false;
+    const rest = value[end..];
+    if (std.mem.startsWith(u8, rest, "::")) return true;
+    if (!std.mem.startsWith(u8, rest, "://")) return false;
+    for (builtin_git_url_schemes) |scheme| {
+        if (std.ascii.eqlIgnoreCase(value[0..end], scheme)) return false;
+    }
+    return true;
+}
+
+fn is_reversible_git_fetch_option(value: []const u8) bool {
+    for (reversible_git_fetch_flags) |flag| {
+        if (std.mem.eql(u8, value, flag)) return true;
+    }
+    for (reversible_git_fetch_value_options) |prefix| {
+        if (std.mem.startsWith(u8, value, prefix)) return true;
     }
     return false;
 }
@@ -200,6 +266,16 @@ test "known reversible auto commands exclude destructive and hidden effects" {
         "git remote -v",
         "git worktree list --porcelain",
         "git fetch origin main",
+        "git fetch --all --tags",
+        "git fetch --depth=1 origin main",
+        "git fetch --no-tags origin +main:main",
+        "git fetch origin -- --not-an-option",
+        "git fetch https://github.com/y2-intel/harness main",
+        "git fetch HTTPS://github.com/y2-intel/harness",
+        "git fetch ssh://git@github.com/y2-intel/harness.git",
+        "git fetch git@github.com:y2-intel/harness.git",
+        "git fetch file:///tmp/repository",
+        "git fetch ../other main",
         "npm install 2>&1",
         "npm run dev",
         "zig build test",
@@ -221,6 +297,25 @@ test "known reversible auto commands exclude destructive and hidden effects" {
         "npm install --prefix=/tmp/global",
         "npm install --location global",
         "git fetch --prune origin",
+        "git fetch -p",
+        "git fetch --prun origin",
+        "git fetch --prune-tags origin",
+        "git fetch --upload-pack=x .",
+        "git fetch --upload-pack x origin",
+        "git fetch --upl=x .",
+        "git fetch origin --upload-pack=x",
+        "git fetch '--upload-pack=x' .",
+        "git fetch --filter=blob:none origin",
+        "git fetch --unknown-option origin",
+        "git fetch probe::x",
+        "git fetch ext::sh",
+        "git fetch 'probe.v2+x::y' main",
+        "git fetch -- probe::x",
+        "git fetch origin -- probe::x",
+        "git fetch --multiple origin probe::x",
+        "git fetch probe://host/repository",
+        "git fetch PROBE://host/repository",
+        "git fetch ftp://host/repository",
     }) |command| {
         try std.testing.expect(!try knownReversibleAutoCommand(
             std.testing.allocator,

@@ -37,21 +37,17 @@ zig build run
 
 ## Verification Workflow
 
+For upstream updates, follow the [selective integration procedure and preserved Y2 contracts](docs/upstream-integration.md). Port a coherent compatible series in an isolated worktree and verify the fork's branding, providers, permissions, and public interfaces alongside the changed behavior.
+
 Keep the local development loop focused: run the narrowest test that covers the changed path, build y2, and exercise the change using `./zig-out/bin/y2`. The installed `y2` on `PATH` is not valid development evidence.
 
-Once the focused checks pass, create a clean checkpoint commit, push the non-`main` feature branch, and open a draft PR immediately. The **Full CI** workflow runs the complete deterministic suite on native Linux x86_64, Linux aarch64, macOS x86_64, and macOS aarch64 runners. The native matrix builds, tests, and smoke-tests ReleaseSafe on every platform; formatting and the public-surface audit run in those ReleaseSafe jobs. Four duration-balanced, isolated ReleaseSafe E2E shards per platform use checked-in weights to assign every Bun test file once; files inside each shard run sequentially in separate Bun processes so terminal fixtures and process state cannot leak between files. A failed file receives one bounded retry after tmux is reset.
+Once focused checks pass, create a clean checkpoint commit, push the feature branch, and open or update the PR. After reviewing the exact diff, docs, and fresh-binary evidence, mark it ready. PRs and feature-branch updates do not trigger GitHub Actions; readiness relies on local evidence and review.
 
-Standard PR CI reports ReleaseSafe Build & Test and deterministic E2E results. Do not mark the draft PR ready until all four Full CI jobs and the final ship gate have succeeded for the exact current commit. Each platform aggregate requires its ReleaseSafe native check and all four ReleaseSafe E2E shards. A result from an older commit does not count. Live model evals are separate from this gate because they require credentials and are not deterministic.
+CI compute is reserved for releases from canonical `origin/main`. The Release workflow runs Full CI on Linux x86_64, Linux aarch64, macOS x86_64, and macOS aarch64. Each platform requires its ReleaseSafe build, unit tests, runtime smoke, and four deterministic E2E shards. Linux startup measurements reuse that job's built binary. Packaging and the macOS arm64 PGSO pipeline wait for Full CI to succeed; publication requires all four platform aggregates and PGSO qualification for the exact release source.
 
-Changes to `build.zig` or `scripts/pgso/` also run the native macOS arm64 PGSO candidate workflow. That lane produces retained size, behavior, and performance evidence but does not alter any release artifact or update channel. Its pinned toolchain, local reproduction command, corpus exclusions, and failure rules are documented in [`scripts/pgso/README.md`](scripts/pgso/README.md).
+The separate automatic CI, benchmark, PR binary-size, and dev-bundle workflows are removed. SDK publication follows successful main releases, checks native and WASM behavior, and reuses its WASM build for browser tests. Main-only manual release recovery and stable SDK publication remain available for already qualified releases. A PR-ready state does not claim cross-platform release qualification.
 
-Every pull request also receives informational ReleaseSafe binary-size
-comparisons for Linux x86_64, Linux arm64, macOS x86_64, and macOS arm64. Each
-comparison builds the pull request merge commit and base commit on the same
-native runner, reports exact file and ELF or Mach-O section deltas, and emits a
-warning at increases of 52,429 bytes (0.050000 MiB) or more. The warning requests
-investigation but does not replace the full PGSO release gate or reject a valid
-feature solely for adding code.
+For workflow edits, run `bun test scripts/tests/workflow-policy.test.ts`. The same policy check runs before release planning. PGSO toolchain pins, local reproduction, corpus exclusions, and failure rules remain documented in [`scripts/pgso/README.md`](scripts/pgso/README.md). Use `scripts/binary_size.py` locally for size comparisons instead of automatic PR rebuilds.
 
 ## Pull Requests
 
@@ -467,10 +463,7 @@ macOS release jobs before enabling signed publication. The signing helper fails
 closed when credentials are absent or invalid and verifies the Developer ID,
 team, identifier, notarization result, and ticket before packaging.
 
-After CI passes for a push to `main`, the dev release workflow builds retained
-GitHub Actions artifacts for all four supported platforms and the WebAssembly
-surface. It does not publish a hosted update channel, create tags, or create a
-GitHub Release. The `dev` upgrade channel requires a separately published development manifest.
+Automatic dev builds and dev npm publications are disabled to reserve compute for stable main releases. The existing `dev` upgrade channel still requires a separately published development manifest; this policy does not create or update one.
 
 Release notes are public product copy. Describe user-visible behavior, spell
 the product `y2`, preserve exact code identifiers, and omit contributor attribution, tracker references, repository
@@ -483,7 +476,7 @@ Do not create tags manually. The workflow owns tag creation.
 
 ## Benchmarks
 
-Startup latency benchmarks run automatically on every PR and push to `main` via `.github/workflows/bench.yml`.
+Startup latency benchmarks run during canonical main-release Full CI, using the Linux x86_64 binary already built by that job. PRs and feature pushes do not run benchmarks in GitHub Actions.
 
 The workflow builds a ReleaseSafe binary, then uses [hyperfine](https://github.com/sharkdp/hyperfine) to measure wall-clock time for six paths:
 
@@ -524,5 +517,5 @@ Minimum checklist:
 1. Run `zig fmt --check src/` and the focused tests for the changed path.
 2. Run `zig build`, then exercise the change with `./zig-out/bin/y2`.
 3. Push the feature branch and open a draft PR immediately.
-4. Require all four **Full CI** jobs and the final ship gate to pass for the exact current commit before marking the PR ready.
+4. Review the exact commit and record local tests and built-binary evidence before marking the PR ready. Full CI and PGSO gate main-release publication.
 5. Update `README.md` if user-facing behavior changed.

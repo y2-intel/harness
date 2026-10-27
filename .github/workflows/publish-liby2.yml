@@ -2,34 +2,27 @@ name: Publish liby2
 
 on:
   workflow_run:
-    workflows: [CI, Release]
+    workflows: [Release]
     types: [completed]
     branches: [main]
   workflow_dispatch:
-    inputs:
-      channel:
-        description: npm channel to publish
-        required: true
-        type: choice
-        options:
-          - dev
-          - stable
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-liby2-${{ (github.event.workflow_run.name == 'Release' || inputs.channel == 'stable') && 'stable' || 'dev' }}
+  group: publish-liby2-stable
   queue: max
 
 jobs:
   metadata:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'push' ||
-        (github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'workflow_dispatch')) &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      github.repository == 'y2-intel/harness' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.name == 'Release' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     outputs:
       app_version: ${{ steps.metadata.outputs.app_version }}
@@ -48,45 +41,20 @@ jobs:
         id: metadata
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          REQUESTED_CHANNEL: ${{ inputs.channel }}
-          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            CHANNEL="$REQUESTED_CHANNEL"
-            SHA=$(git rev-parse HEAD)
-          else
-            SHA="$WORKFLOW_SHA"
-            if [ "$WORKFLOW_NAME" = "Release" ]; then
-              CHANNEL=stable
-            else
-              CHANNEL=dev
-            fi
-          fi
-
-          python3 scripts/release.py metadata --source-sha "$SHA" --channel "$CHANNEL" \
+          SHA=$(git rev-parse HEAD)
+          python3 scripts/release.py metadata --source-sha "$SHA" --channel stable \
             --output "$RUNNER_TEMP/liby2-release.json"
           BASE_VERSION=$(jq -r .version "$RUNNER_TEMP/liby2-release.json")
-          SHOULD_PUBLISH=true
-          if [ "$CHANNEL" = "stable" ]; then
-            VERSION="$BASE_VERSION"
-            NPM_TAG=latest
-          else
-            SHORT_SHA=$(printf '%s' "$SHA" | cut -c1-12)
-            VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}.g${SHORT_SHA}"
-            NPM_TAG=dev
-          fi
 
           echo "app_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=${NPM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "channel=stable" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "should_publish=${SHOULD_PUBLISH}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Publishing liby2@${VERSION} on the ${CHANNEL} channel (${NPM_TAG})"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing liby2@${BASE_VERSION} on the stable channel"
 
   native:
     needs: metadata
@@ -169,6 +137,15 @@ jobs:
 
       - name: Test Node and WebAssembly
         run: npm run --prefix sdk test:node-wasm
+
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+
+      - name: Test Browser and WebAssembly using the same build
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: npm run --prefix sdk test:browser-wasm
 
       - name: Upload WebAssembly artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -270,17 +247,6 @@ jobs:
             }
             console.log(`validated ${report.name}@${report.version}: ${report.files.length} files, ${report.size} bytes packed`);
           '
-
-      - name: Confirm dev publish still targets main
-        if: needs.metadata.outputs.channel == 'dev'
-        env:
-          RELEASE_SHA: ${{ needs.metadata.outputs.sha }}
-        run: |
-          MAIN_SHA=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$MAIN_SHA" != "$RELEASE_SHA" ]; then
-            echo "::error::main advanced to ${MAIN_SHA}; refusing to move the dev channel to stale ${RELEASE_SHA}"
-            exit 1
-          fi
 
       - name: Publish with npm trusted publishing
         env:

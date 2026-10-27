@@ -35,6 +35,28 @@ Later commits were reviewed individually for compatibility. The reviewed tip con
 
 This table records selected changes applied beyond the merge boundary. It does not claim that every later upstream change was imported or that the reviewed upstream tip is an ancestor of this integration.
 
+## Selective fetch-review update
+
+The October 27, 2026 update starts from Y2 `827d08a95a5c5a459f8367141a4627209903a8f9`, reviews upstream through `70866b27124a374b6ea83e9ea0026d36abbff03c`, and retains shared ancestor `9cffee561b624a89c166b7570c1cd7e95908dac1`. It adapts only this related security series:
+
+| Source | Adaptation |
+| --- | --- |
+| `675617d4dc8657820b459f0b69675d8433f0fa84` | Require known exact fetch options before bypassing automatic review, including review of custom upload-pack commands and abbreviated options. |
+| `efd9f9d4f3f62edc14f3bb9a25a6ee2267f0d5d2` | Keep partial-clone filters on the review path. |
+| `43b308007831d4d2a3b0923493319fbec6ddf8ee` | Review explicit remote-helper addresses and unknown URL schemes, including addresses after the option separator. |
+
+The owner remains `src/core/shell_command/command_effect.zig`, with the existing parsed-command boolean contract. There is no new persistent state, command, flag, or output schema. Configured and saved-session permission rules still run before the routine-action shortcut. The existing automatic review owns every remaining unresolved action.
+
+Regression coverage stays in `tests/e2e/auto-mode-reliability.test.ts`, whose verification-only PGSO classification still fits its security and recovery role. It checks an actual local fetch plus review of helper and upload-pack commands through the built y2 process. The command classifier also covers accepted transports, pruning, filters, unknown flags, and abbreviations.
+
+Y2 branding, profile paths, provider routes, session and SDK contracts, and installer/release files are outside this port. In particular, the Agent Y2 thread and client metadata introduced in `827d08a9` remains intact, and direct OpenAI-compatible requests retain their separate metadata contract. Later upstream storage, SDK, MCP-engine, and UI redesigns require their own compatibility assessment; this update does not import them.
+
+For later syncs, fetch both remotes, record the origin/upstream/base SHAs, and select a coherent patch series in an isolated worktree. Review its prerequisites against the preserved boundaries below, adapt names and APIs to Y2, and retain focused regressions. Never use a wholesale upstream merge or a conflict-resolution preference as evidence that fork behavior survived. Mark the PR ready only after exact-commit local review, focused tests, and fresh-binary interaction. Full CI and PGSO run only for canonical main releases and must pass before publication.
+
+## Main-only release compute policy
+
+The accompanying delivery-policy change removes automatic PR/feature jobs and duplicate main CI, benchmark, size-comparison, and dev-bundle workflows. Full CI and PGSO are reusable main-release jobs only. Linux latency checks reuse the Full CI binary, packaging waits for verification, and stable SDK publication follows the qualified release. This changes when delivery work runs; the Y2 branding, providers, CLI/SDK interfaces, version computation, and release qualification requirements remain intact.
+
 ## Preserved compatibility boundaries
 
 - The executable remains `y2`, the profile remains `~/.y2`, and project defaults remain `.y2.json`. Existing Y2 environment variables, profile state, authentication, and session data retain their identities.
@@ -83,4 +105,4 @@ node --experimental-wasm-jspi sdk/tests/test-core.mjs
 
 Use Node.js 24 for these SDK checks. The loader test exercises cursor progression, an empty middle page, repeated and invalid cursors, stable captured event data, and host-store behavior. The native test creates more than one page of sessions and verifies explicit, default, and relative workspace isolation.
 
-A draft PR must remain a draft until Full CI passes for the exact current commit on Linux x86_64, Linux arm64, macOS x86_64, and macOS arm64, followed by the final ship gate. Query PR checks with `gh pr checks --repo y2-intel/harness`; a successful result from another commit does not satisfy this gate.
+PR readiness uses focused local checks and a fresh built-binary interaction for the exact commit. Feature pushes and PR lifecycle events intentionally allocate no GitHub Actions runners. The separate main-release gate requires Full CI across all four architectures and PGSO qualification for the exact source SHA. Upstream syncs must preserve this compute policy; `bun test scripts/tests/workflow-policy.test.ts` checks the trigger and release dependency boundaries.
