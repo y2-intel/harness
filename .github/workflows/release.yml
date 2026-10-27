@@ -26,6 +26,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Bun for workflow policy checks
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Verify main-only release workflow policy
+        run: bun test scripts/tests/workflow-policy.test.ts
+
       - name: Compute release from Y2 history
         id: plan
         env:
@@ -49,7 +57,7 @@ jobs:
       app_version: ${{ needs.plan.outputs.version }}
 
   build-linux:
-    needs: plan
+    needs: [plan, verify]
     if: needs.plan.outputs.needed == 'true'
     name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -89,7 +97,7 @@ jobs:
             y2-${{ matrix.name }}.tar.gz.sha256
 
   build-macos-x86_64:
-    needs: plan
+    needs: [plan, verify]
     if: needs.plan.outputs.needed == 'true'
     name: Build macos-x86_64
     runs-on: macos-15-intel
@@ -121,7 +129,7 @@ jobs:
             y2-macos-x86_64.tar.gz.sha256
 
   build-macos-arm64:
-    needs: plan
+    needs: [plan, verify]
     if: needs.plan.outputs.needed == 'true'
     permissions:
       actions: read

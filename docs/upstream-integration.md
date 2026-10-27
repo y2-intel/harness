@@ -51,7 +51,11 @@ Regression coverage stays in `tests/e2e/auto-mode-reliability.test.ts`, whose ve
 
 Y2 branding, profile paths, provider routes, session and SDK contracts, and installer/release files are outside this port. In particular, the Agent Y2 thread and client metadata introduced in `827d08a9` remains intact, and direct OpenAI-compatible requests retain their separate metadata contract. Later upstream storage, SDK, MCP-engine, and UI redesigns require their own compatibility assessment; this update does not import them.
 
-For later syncs, fetch both remotes, record the origin/upstream/base SHAs, and select a coherent patch series in an isolated worktree. Review its prerequisites against the preserved boundaries below, adapt names and APIs to Y2, and retain focused regressions. Never use a wholesale upstream merge or a conflict-resolution preference as evidence that fork behavior survived. Keep the PR draft until the exact current commit passes Full CI on all four native architectures and the final ship gate.
+For later syncs, fetch both remotes, record the origin/upstream/base SHAs, and select a coherent patch series in an isolated worktree. Review its prerequisites against the preserved boundaries below, adapt names and APIs to Y2, and retain focused regressions. Never use a wholesale upstream merge or a conflict-resolution preference as evidence that fork behavior survived. Mark the PR ready only after exact-commit local review, focused tests, and fresh-binary interaction. Full CI and PGSO run only for canonical main releases and must pass before publication.
+
+## Main-only release compute policy
+
+The accompanying delivery-policy change removes automatic PR/feature jobs and duplicate main CI, benchmark, size-comparison, and dev-bundle workflows. Full CI and PGSO are reusable main-release jobs only. Linux latency checks reuse the Full CI binary, packaging waits for verification, and stable SDK publication follows the qualified release. This changes when delivery work runs; the Y2 branding, providers, CLI/SDK interfaces, version computation, and release qualification requirements remain intact.
 
 ## Preserved compatibility boundaries
 
@@ -101,4 +105,4 @@ node --experimental-wasm-jspi sdk/tests/test-core.mjs
 
 Use Node.js 24 for these SDK checks. The loader test exercises cursor progression, an empty middle page, repeated and invalid cursors, stable captured event data, and host-store behavior. The native test creates more than one page of sessions and verifies explicit, default, and relative workspace isolation.
 
-A draft PR must remain a draft until Full CI passes for the exact current commit on Linux x86_64, Linux arm64, macOS x86_64, and macOS arm64, followed by the final ship gate. Query PR checks with `gh pr checks --repo y2-intel/harness`; a successful result from another commit does not satisfy this gate.
+PR readiness uses focused local checks and a fresh built-binary interaction for the exact commit. Feature pushes and PR lifecycle events intentionally allocate no GitHub Actions runners. The separate main-release gate requires Full CI across all four architectures and PGSO qualification for the exact source SHA. Upstream syncs must preserve this compute policy; `bun test scripts/tests/workflow-policy.test.ts` checks the trigger and release dependency boundaries.

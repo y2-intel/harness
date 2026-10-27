@@ -17,7 +17,6 @@ from scripts.binary_size import (
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "binary-size.yml"
 
 
 class BinarySizeCliTests(unittest.TestCase):
@@ -236,43 +235,6 @@ class BinarySizeCliTests(unittest.TestCase):
             with self.assertRaisesRegex(BinarySizeError, "missing __TEXT segment"):
                 parse_macho_sections(report)
 
-
-class BinarySizeWorkflowTests(unittest.TestCase):
-    def test_pr_workflow_compares_all_supported_release_safe_targets(self) -> None:
-        self.assertTrue(WORKFLOW_PATH.is_file(), "binary-size workflow is missing")
-        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-
-        self.assertIn("pull_request:", workflow)
-        self.assertNotIn("pull_request_target", workflow)
-        self.assertIn("contents: read", workflow)
-        self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
-        for name, target, runner in (
-            ("linux-x86_64", "x86_64-linux", "ubuntu-24.04"),
-            ("linux-aarch64", "aarch64-linux", "ubuntu-24.04-arm"),
-            ("macos-x86_64", "x86_64-macos", "macos-15-intel"),
-            ("macos-aarch64", "aarch64-macos", "macos-15"),
-        ):
-            self.assertIn(f"name: {name}", workflow)
-            self.assertIn(f"target: {target}", workflow)
-            self.assertIn(f"runner: {runner}", workflow)
-        self.assertIn("fetch-depth: 0", workflow)
-        self.assertIn("github.event.pull_request.base.sha", workflow)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$HEAD_SHA"', workflow)
-        self.assertIn(
-            'test "$(git -C "$base_worktree" rev-parse HEAD)" = "$BASE_SHA"',
-            workflow,
-        )
-        self.assertIn("-Dtarget=${{ matrix.target }}", workflow)
-        self.assertIn("-Doptimize=ReleaseSafe", workflow)
-        self.assertGreaterEqual(workflow.count("zig build"), 2)
-        self.assertGreaterEqual(workflow.count("size -m"), 2)
-        self.assertGreaterEqual(workflow.count("size -A -d"), 2)
-        self.assertIn("python3 -m scripts.binary_size", workflow)
-        self.assertIn("$GITHUB_STEP_SUMMARY", workflow)
-        self.assertIn("::warning title=Binary size increase::", workflow)
-        self.assertIn("actions/upload-artifact@v4", workflow)
-        self.assertIn("binary-size-evidence-${{ matrix.name }}", workflow)
-        self.assertIn("binary-size-binaries-${{ matrix.name }}", workflow)
 
 
 if __name__ == "__main__":

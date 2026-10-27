@@ -10,7 +10,7 @@ Before reporting the work as ready:
 
 1. Build succeeds.
 2. Focused tests for the changed path pass locally.
-3. The **Full CI** run for the exact current commit passes on every required Linux and macOS runner.
+3. Review the exact current commit and record the focused local evidence. Full CI is a main-release gate, not a PR gate.
 4. Run the built binary locally and drive at least one real interaction that exercises the change end to end.
 5. Confirm the process did not abort, stderr is clean, and the behavior matches what you are about to tell the user.
 
@@ -210,7 +210,7 @@ Do not bypass the permission system for new tools.
 
 * Zig unit tests go inside the source file they test, using `test "description" { ... }` blocks.
 
-* Run the narrowest relevant tests while developing. The complete `zig build test` suite runs in ReleaseSafe in **Full CI** after the feature branch is pushed, and it must pass before the draft PR is marked ready.
+* Run the narrowest relevant tests while developing. The complete `zig build test` suite runs in ReleaseSafe in **Full CI** during the canonical `main` release. Do not dispatch full CI for feature branches or PR updates.
 
 * Use `std.testing.expect`, `std.testing.expectEqual`, `std.testing.expectEqualStrings` for assertions.
 
@@ -266,20 +266,24 @@ Assign the label when the PR is opened and keep it accurate when the PR changes.
 
 Keep PR titles as clean imperative sentences, such as `Restore feedback report file clipboard`. Do not add bracketed prefixes such as `[bug]`, `[feature]`, or `[improvement]`. Type belongs in the label, not the title.
 
-## Full CI on Feature Branches
+## Main-only Release CI
 
-Do not run the complete deterministic test suite locally as the default development loop. Run the focused test for the changed path, build the binary, and exercise that path with `./zig-out/bin/y2`.
+PRs and feature-branch commits do not run GitHub Actions. Keep the local development loop focused: run the relevant tests, build the binary, and exercise the changed path with `./zig-out/bin/y2`. Review the final diff, update docs, and record the exact commit and local evidence before marking a PR ready. A PR-ready result is not release qualification.
 
-After the focused checks pass, create a clean checkpoint commit, push the non-`main` feature branch, and open a draft PR immediately. `.github/workflows/full-ci.yml` runs the following on all four supported native runner architectures:
+Only the canonical `y2-intel/harness` main release spends CI compute. `.github/workflows/release.yml` calls Full CI and, after it succeeds, builds the release packages and qualifies macOS arm64 PGSO. Full CI and PGSO have no standalone push, pull-request, or manual triggers. Do not restore automatic feature CI, duplicate main CI, PR binary-size builds, or dev-bundle jobs when importing upstream workflows.
+
+Full CI runs on all four native runner architectures:
 
 * `ubuntu-24.04` (x86_64)
 * `ubuntu-24.04-arm` (aarch64)
 * `macos-15-intel` (x86_64)
 * `macos-15` (aarch64)
 
-The native matrix builds, tests, and smoke-tests ReleaseSafe on every platform; formatting and the public-surface audit run in those ReleaseSafe jobs. The E2E matrix runs four duration-balanced, isolated ReleaseSafe shards per platform with Bun and tmux. Checked-in weights assign every test file to exactly one shard on each platform, and files inside each shard run sequentially in separate Bun processes so terminal fixtures and process state cannot leak between files. A failed file receives one bounded retry after its tmux server is reset. Live model evals remain separate because they require credentials and are not deterministic.
+The native matrix builds, tests, and smoke-tests ReleaseSafe on every platform, including formatting and public-surface checks. Four isolated duration-balanced E2E shards run per platform with Bun and tmux; files run sequentially in separate Bun processes with one bounded retry. Linux x86_64 also checks scripts and startup budgets using its existing built binary. Live model evals remain separate because they require credentials.
 
-A Full CI result is valid only when it belongs to the exact current commit and all four `Full suite (...)` jobs succeed. Each platform aggregate requires its ReleaseSafe native check plus all four ReleaseSafe E2E shards. Do not mark the draft PR ready or request review from a stale, partial, queued, cancelled, skipped, or failed run. If Full CI fails, make the smallest repair, rerun the focused local proof, push the new commit to the same draft PR, and wait for Full CI on the new exact commit. After CI passes, run the final ship gate and mark the PR ready only when it reports `SHIP` for that exact commit.
+Publication requires Full CI for the exact main source SHA, all four `Full suite (...)` aggregates, and successful PGSO qualification. Failed, skipped, stale, or partial results cannot authorize publication. Fix release failures with focused local proof and a reviewed follow-up; never bypass the release gate. SDK publication follows a successful canonical main release and verifies the published stable version before building.
+
+Run `bun test scripts/tests/workflow-policy.test.ts` locally when changing workflows. The release planner runs this guard before expensive work; it rejects PR/feature triggers and verifies the main-only execution and qualification dependencies.
 
 ## Reproducing Render Bugs
 
@@ -319,14 +323,14 @@ When a tmux or tape-based scenario exposes a bug, reproduce it as a Zig unit tes
 
 ## Benchmarks
 
-Startup latency benchmarks live in `benchmarks/` and run in CI via `.github/workflows/bench.yml`.
+Startup latency benchmarks live in `benchmarks/` and run in the Linux x86_64 Full CI job during main releases.
 
 ```bash
 ./benchmarks/startup.sh            # full run (100 iterations, builds ReleaseSafe, needs hyperfine)
 ./benchmarks/startup.sh --quick    # quick run (20 iterations)
 ```
 
-The CI workflow builds a ReleaseSafe binary, measures six CLI paths with hyperfine, and enforces per-command latency budgets. PRs that exceed a budget fail the check. On `main`, results are retained as GitHub Actions artifacts for historical tracking.
+The release verification job reuses its ReleaseSafe binary, measures six CLI paths with hyperfine, and enforces per-command latency budgets. Failures block publication. Measurements are retained as GitHub Actions artifacts.
 
 The startup benchmark uses `Y2_BENCH=1`, an environment variable that runs through arg parsing and CLI dispatch, then exits before TTY initialization. This lives in `src/core/app/app_entry_runtime.zig`.
 
@@ -344,18 +348,7 @@ When adding features, consider their impact on startup latency. The `y2 help` pa
 
 ## Binary Size Observability
 
-Every pull request runs `.github/workflows/binary-size.yml` across Linux x86_64,
-Linux arm64, macOS x86_64, and macOS arm64. Each matrix job builds the pull
-request merge commit and its base commit as stripped ReleaseSafe binaries on
-the same native runner, then reports the exact byte and MiB delta plus ELF or
-Mach-O section changes.
-
-Each platform check is informational. An increase of at least 52,429 bytes
-(0.050000 MiB) emits a warning and retains that platform's binaries for
-investigation, but does not reject the pull request. Investigate notable
-unexplained growth before changing the threshold. The full macOS arm64 PGSO
-release qualification remains authoritative for the 7.800 MiB production
-ceiling and performance gates.
+Binary-size comparisons are available locally through `scripts/binary_size.py`; they do not allocate eight extra candidate/base builds on every PR. Investigate notable unexplained growth using exact byte and ELF or Mach-O section deltas. The full macOS arm64 PGSO main-release qualification remains authoritative for the 7.800 MiB production ceiling and performance gates.
 
 ## Documentation
 
@@ -459,5 +452,5 @@ The canonical repository is `y2-intel/harness` on GitHub. All URLs, links, and r
 1. Run `zig fmt --check src/` and the focused tests for the changed path.
 2. Build and exercise the change locally with `./zig-out/bin/y2`.
 3. Push a clean checkpoint commit and open a draft PR immediately.
-4. Require **Full CI** and the final ship gate to pass on the exact current commit across all four native runners.
+4. Finish the exact-commit local review gate and record its evidence before marking the PR ready. Full CI and PGSO remain mandatory before main-release publication.
 5. Update docs if behavior changed.
