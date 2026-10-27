@@ -35,6 +35,24 @@ Later commits were reviewed individually for compatibility. The reviewed tip con
 
 This table records selected changes applied beyond the merge boundary. It does not claim that every later upstream change was imported or that the reviewed upstream tip is an ancestor of this integration.
 
+## Selective fetch-review update
+
+The October 27, 2026 update starts from Y2 `827d08a95a5c5a459f8367141a4627209903a8f9`, reviews upstream through `70866b27124a374b6ea83e9ea0026d36abbff03c`, and retains shared ancestor `9cffee561b624a89c166b7570c1cd7e95908dac1`. It adapts only this related security series:
+
+| Source | Adaptation |
+| --- | --- |
+| `675617d4dc8657820b459f0b69675d8433f0fa84` | Require known exact fetch options before bypassing automatic review, including review of custom upload-pack commands and abbreviated options. |
+| `efd9f9d4f3f62edc14f3bb9a25a6ee2267f0d5d2` | Keep partial-clone filters on the review path. |
+| `43b308007831d4d2a3b0923493319fbec6ddf8ee` | Review explicit remote-helper addresses and unknown URL schemes, including addresses after the option separator. |
+
+The owner remains `src/core/shell_command/command_effect.zig`, with the existing parsed-command boolean contract. There is no new persistent state, command, flag, or output schema. Configured and saved-session permission rules still run before the routine-action shortcut. The existing automatic review owns every remaining unresolved action.
+
+Regression coverage stays in `tests/e2e/auto-mode-reliability.test.ts`, whose verification-only PGSO classification still fits its security and recovery role. It checks an actual local fetch plus review of helper and upload-pack commands through the built y2 process. The command classifier also covers accepted transports, pruning, filters, unknown flags, and abbreviations.
+
+Y2 branding, profile paths, provider routes, session and SDK contracts, and installer/release files are outside this port. In particular, the Agent Y2 thread and client metadata introduced in `827d08a9` remains intact, and direct OpenAI-compatible requests retain their separate metadata contract. Later upstream storage, SDK, MCP-engine, and UI redesigns require their own compatibility assessment; this update does not import them.
+
+For later syncs, fetch both remotes, record the origin/upstream/base SHAs, and select a coherent patch series in an isolated worktree. Review its prerequisites against the preserved boundaries below, adapt names and APIs to Y2, and retain focused regressions. Never use a wholesale upstream merge or a conflict-resolution preference as evidence that fork behavior survived. Keep the PR draft until the exact current commit passes Full CI on all four native architectures and the final ship gate.
+
 ## Preserved compatibility boundaries
 
 - The executable remains `y2`, the profile remains `~/.y2`, and project defaults remain `.y2.json`. Existing Y2 environment variables, profile state, authentication, and session data retain their identities.

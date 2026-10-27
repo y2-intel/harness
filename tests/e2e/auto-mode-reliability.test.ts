@@ -165,6 +165,137 @@ async function waitForEither(
 
 describe("lean auto mode reliability", () => {
   test(
+    "git fetch with known options updates remote refs without automatic review",
+    async () => {
+      const root = createIsolatedRoot();
+      const remote = join(root.root, "remote");
+      mkdirSync(remote);
+      runGit(remote, ["init", "--quiet", "--initial-branch=main"]);
+      runGit(remote, ["config", "user.name", "Fixture"]);
+      runGit(remote, ["config", "user.email", "fixture@example.com"]);
+      writeFileSync(join(remote, "tracked.txt"), "fetch compatibility\n");
+      runGit(remote, ["add", "tracked.txt"]);
+      runGit(remote, ["commit", "--quiet", "-m", "initial"]);
+      const expectedHead = runGit(remote, ["rev-parse", "HEAD"]).trim();
+      runGit(root.workspace, ["init", "--quiet"]);
+      runGit(root.workspace, ["remote", "add", "origin", remote]);
+      const gateway = startGateway(
+        [
+          cleanCommandCall("git fetch --no-tags origin main", "ordinary_fetch"),
+          (body) => {
+            expect(toolResultText(body, "ordinary_fetch")).not.toContain("review_caution");
+            return fakeGatewayFinalText("ordinary fetch succeeded");
+          },
+        ],
+        [fakeGatewayPermissionDecision("caution", "unused_fetch_review")],
+      );
+      const result = await runY2(
+        ["ask", "--quiet", "--json", "--no-save", "Fetch the latest changes."],
+        {
+          cwd: root.workspace,
+          env: { ...gatewayEnv(root, gateway), Y2_API_KEY: "" },
+          timeoutMs: TIMEOUT,
+        },
+      );
+
+      expect(result.code, `stdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(result.stderr).not.toMatch(/panic|fatal:|error:/i);
+      expect(gateway.classifierRequests).toHaveLength(0);
+      expect(runGit(root.workspace, ["rev-parse", "refs/remotes/origin/main"]).trim()).toBe(expectedHead);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "git fetch with an option that names a program remains reviewer owned",
+    async () => {
+      const root = createIsolatedRoot();
+      runGit(root.workspace, ["init", "-q"]);
+      const marker = join(root.root, "upload-pack-must-not-run");
+      const bin = installRecorder(root, "upload-pack-probe", marker);
+      const gateway = startGateway(
+        [
+          cleanCommandCall("git fetch --upload-pack=upload-pack-probe .", "upload_pack"),
+          cleanCommandCall("git fetch --upl=upload-pack-probe .", "abbreviated_upload_pack"),
+          (body) => {
+            expect(toolResultText(body, "upload_pack")).toContain("review_caution");
+            expect(toolResultText(body, "abbreviated_upload_pack")).toContain("review_caution");
+            return fakeGatewayFinalText("fetch options stayed reviewed");
+          },
+        ],
+        [
+          fakeGatewayPermissionDecision("caution", "upload_pack_review"),
+          fakeGatewayPermissionDecision("caution", "abbreviated_upload_pack_review"),
+        ],
+      );
+      const result = await runY2(
+        ["ask", "--quiet", "--json", "--no-save", "Fetch the latest changes."],
+        {
+          cwd: root.workspace,
+          env: {
+            ...gatewayEnv(root, gateway),
+            Y2_API_KEY: "",
+            PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          },
+          timeoutMs: TIMEOUT,
+        },
+      );
+
+      expect(result.code, `stdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(result.stderr).not.toMatch(/panic|fatal:|error:/i);
+      expect(gateway.classifierRequests).toHaveLength(2);
+      expect(existsSync(marker)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "git fetch from a repository that names a remote helper remains reviewer owned",
+    async () => {
+      const root = createIsolatedRoot();
+      runGit(root.workspace, ["init", "-q"]);
+      const marker = join(root.root, "remote-helper-must-not-run");
+      const bin = installRecorder(root, "git-remote-probe", marker);
+      const gateway = startGateway(
+        [
+          cleanCommandCall("git fetch probe::x", "helper_prefix"),
+          cleanCommandCall("git fetch -- probe::x", "helper_after_separator"),
+          cleanCommandCall("git fetch probe://host/repository", "helper_scheme"),
+          (body) => {
+            for (const id of ["helper_prefix", "helper_after_separator", "helper_scheme"]) {
+              expect(toolResultText(body, id)).toContain("review_caution");
+            }
+            return fakeGatewayFinalText("remote helpers stayed reviewed");
+          },
+        ],
+        [
+          fakeGatewayPermissionDecision("caution", "helper_prefix_review"),
+          fakeGatewayPermissionDecision("caution", "helper_after_separator_review"),
+          fakeGatewayPermissionDecision("caution", "helper_scheme_review"),
+        ],
+      );
+      const result = await runY2(
+        ["ask", "--quiet", "--json", "--no-save", "Fetch the latest changes."],
+        {
+          cwd: root.workspace,
+          env: {
+            ...gatewayEnv(root, gateway),
+            Y2_API_KEY: "",
+            PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          },
+          timeoutMs: TIMEOUT,
+        },
+      );
+
+      expect(result.code, `stdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(result.stderr).not.toMatch(/panic|fatal:|error:/i);
+      expect(gateway.classifierRequests).toHaveLength(3);
+      expect(existsSync(marker)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a configured safe command bypasses automatic review",
     async () => {
       const root = createIsolatedRoot();

@@ -169,6 +169,8 @@ Commands run by y2 receive `AI_AGENT=y2` in their environment. Development tools
 
 y2 starts in `auto` permission mode. Routine understood development actions run directly. Each unresolved action receives one narrow safety review based on the current user request and the exact pending action. A clear result authorizes only that action. A caution or unavailable review holds the action and returns advice to the agent without opening a permission prompt or ending the turn.
 
+For `git fetch`, the routine-action shortcut accepts only known options. Custom upload-pack commands, remote-helper addresses, pruning, partial-clone filters, and unfamiliar or abbreviated options receive automatic review unless an explicit permission rule already resolves the action. Ordinary fetches with options such as `--tags` or `--depth=1` keep running directly.
+
 JSON and quiet requests stay noninteractive by default. Add `--prompt-permissions` to allow configured approval prompts when stdin is a TTY. Automatic safety review never opens that prompt. Prompt text is written to stderr, so JSON stdout stays parseable and quiet stdout stays empty. Piped or redirected stdin remains noninteractive and fails instead of waiting for approval.
 
 Inside a saved session, `/permissions remember <allow|deny> <tool-name> <arguments-json>` stores an exact confirmed rule without running the action. `/permissions` lists stable rule IDs, and `/permissions revoke <rule-id>` removes a stored rule even when its original workspace or file state has changed.
